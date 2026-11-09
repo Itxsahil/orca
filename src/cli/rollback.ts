@@ -1,8 +1,7 @@
-import { loadConfig } from '../config/configLoader';
+import { loadConfig, sshConfigFrom } from '../config/configLoader';
 import { DockerManager } from '../docker/dockerManager';
 import { SSHClient } from '../ssh/sshClient';
 import { RedisStorage } from '../storage/redis';
-import { SSHConnectionConfig, DeploymentMetadata } from '../types/config';
 import { Logger } from '../utils/logger';
 
 export default async function rollback(): Promise<void> {
@@ -12,8 +11,11 @@ export default async function rollback(): Promise<void> {
 
     Logger.info(`Rolling back: ${config.app.name}`);
 
-    // Connect to Redis
-    const redis = new RedisStorage(config.server.host, 6379);
+    // Connect over SSH first; Redis is only reachable through the SSH connection
+    const ssh = new SSHClient(sshConfigFrom(config));
+    await ssh.connect();
+
+    const redis = new RedisStorage(ssh);
     await redis.connect();
 
     // Get deployment history
@@ -22,6 +24,7 @@ export default async function rollback(): Promise<void> {
     if (history.length < 2) {
       Logger.error('Not enough deployments to rollback. Need at least 2 deployments.');
       redis.disconnect();
+      ssh.disconnect();
       process.exit(1);
     }
 
@@ -38,17 +41,6 @@ export default async function rollback(): Promise<void> {
       Logger.warn(`Previous deployment status: ${previousDeployment.status}`);
       Logger.warn('The previous container may need to be restarted.');
     }
-
-    // Connect to SSH
-    const sshConfig: SSHConnectionConfig = {
-      host: config.server.host,
-      username: config.server.user,
-      privateKeyPath: config.server.ssh_key,
-      port: config.server.port,
-    };
-
-    const ssh = new SSHClient(sshConfig);
-    await ssh.connect();
 
     const docker = new DockerManager(ssh, config.app.name);
 
@@ -74,9 +66,9 @@ export default async function rollback(): Promise<void> {
     Logger.success(`Active container: ${previousDeployment.containerId.substring(0, 12)}`);
     Logger.success(`URL: https://${config.app.domain}`);
 
-    // Cleanup
-    ssh.disconnect();
+    // Cleanup (Redis first: it runs over the SSH tunnel)
     redis.disconnect();
+    ssh.disconnect();
   } catch (error) {
     Logger.error(
       `Rollback command failed: ${error instanceof Error ? error.message : 'Unknown error'}`,

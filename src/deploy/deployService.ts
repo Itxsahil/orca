@@ -1,11 +1,12 @@
-import { loadConfig } from '../config/configLoader';
+import { loadConfig, sshConfigFrom } from '../config/configLoader';
 import { DockerManager } from '../docker/dockerManager';
 import { Traefik } from '../routing/traefik';
 import { SSHClient } from '../ssh/sshClient';
 import { RedisStorage } from '../storage/redis';
 import { InfrastructureSetup } from '../setup/infrastructureSetup';
-import { OrcaConfig, DeploymentMetadata, SSHConnectionConfig } from '../types/config';
+import { OrcaConfig, DeploymentMetadata } from '../types/config';
 import { Logger } from '../utils/logger';
+import { shellEscape } from '../utils/shell';
 
 export class DeployService {
   private config: OrcaConfig;
@@ -89,14 +90,7 @@ export class DeployService {
     Logger.step(1, 'Connecting to infrastructure...');
 
     // Connect to SSH
-    const sshConfig: SSHConnectionConfig = {
-      host: this.config.server.host,
-      username: this.config.server.user,
-      privateKeyPath: this.config.server.ssh_key,
-      port: this.config.server.port,
-    };
-
-    this.ssh = new SSHClient(sshConfig);
+    this.ssh = new SSHClient(sshConfigFrom(this.config));
     await this.ssh.connect();
 
     // Initialize Docker manager
@@ -106,8 +100,8 @@ export class DeployService {
     this.infraSetup = new InfrastructureSetup(this.ssh);
     await this.infraSetup.ensureInfrastructure();
 
-    // Connect to Redis on the VPS host
-    this.redis = new RedisStorage(this.config.server.host, 6379);
+    // Connect to Redis on the VPS (loopback only) through the SSH connection
+    this.redis = new RedisStorage(this.ssh);
     await this.redis.connect();
 
     Logger.success('Connected to all infrastructure');
@@ -140,10 +134,10 @@ export class DeployService {
       `if [ -d ${escapedProjectPath}/.git ]; then`,
       `  cd ${escapedProjectPath}`,
       '  git fetch --all --prune',
-      `  git checkout ${escapedBranch}`,
+      `  git checkout ${escapedBranch} --`,
       `  git pull --ff-only origin ${escapedBranch}`,
       'else',
-      `  git clone --depth 1 --branch ${escapedBranch} ${escapedRepo} ${escapedProjectPath}`,
+      `  git clone --depth 1 --branch ${escapedBranch} -- ${escapedRepo} ${escapedProjectPath}`,
       'fi',
     ].join('\n');
 
@@ -245,10 +239,6 @@ export class DeployService {
       this.redis.disconnect();
     }
   }
-}
-
-function shellEscape(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 export async function createDeployService(configPath?: string): Promise<DeployService> {

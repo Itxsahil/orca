@@ -7,6 +7,17 @@ export interface ServerConfig {
   ssh_key: string;
   /** SSH port for remote access */
   port: number;
+  /**
+   * Expected SHA256 host key fingerprint (e.g. "SHA256:abc..."), as printed by
+   * `ssh-keygen -lf`. When set, the server must present exactly this key.
+   */
+  host_key?: string;
+  /**
+   * Refuse to connect to servers whose host key is not already known
+   * (in ~/.ssh/known_hosts, ~/.orca/known_hosts or host_key).
+   * When false, an unknown key is trusted on first use and remembered.
+   */
+  strict_host_key_checking: boolean;
 }
 
 export interface AppConfig {
@@ -20,8 +31,13 @@ export interface AppConfig {
   restart: 'no' | 'on-failure' | 'always' | 'unless-stopped';
   /** Docker network to attach the app container to */
   network: string;
-  /** Environment variables for the app container */
+  /**
+   * Environment variables for the app container: the contents of env_file
+   * (if any) merged with inline envs (inline values win).
+   */
   envs: Record<string, string>;
+  /** Path to a dotenv file with secrets, resolved relative to orca.yml */
+  env_file?: string;
   /** Path used by HTTP health checks */
   health_check_path: string;
 }
@@ -70,6 +86,10 @@ export interface SSHConnectionConfig {
   username: string;
   privateKeyPath: string;
   port?: number;
+  /** Expected SHA256 host key fingerprint */
+  hostKey?: string;
+  /** Refuse unknown host keys instead of trusting on first use */
+  strictHostKeyChecking?: boolean;
 }
 
 export interface ContainerConfig {

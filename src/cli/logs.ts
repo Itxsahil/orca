@@ -1,8 +1,7 @@
-import { loadConfig } from '../config/configLoader';
+import { loadConfig, sshConfigFrom } from '../config/configLoader';
 import { DockerManager } from '../docker/dockerManager';
 import { SSHClient } from '../ssh/sshClient';
 import { RedisStorage } from '../storage/redis';
-import { SSHConnectionConfig } from '../types/config';
 import { Logger } from '../utils/logger';
 
 export default async function logs(
@@ -16,8 +15,11 @@ export default async function logs(
 
     Logger.info(`Fetching logs for: ${config.app.name}`);
 
-    // Connect to Redis to get the latest deployment
-    const redis = new RedisStorage(config.server.host, 6379);
+    // Connect over SSH first; Redis is only reachable through the SSH connection
+    const ssh = new SSHClient(sshConfigFrom(config));
+    await ssh.connect();
+
+    const redis = new RedisStorage(ssh);
     await redis.connect();
 
     const latestDeployment = await redis.getLastSuccessfulDeployment(config.app.name);
@@ -25,21 +27,11 @@ export default async function logs(
     if (!latestDeployment) {
       Logger.error('No running deployment found');
       redis.disconnect();
+      ssh.disconnect();
       process.exit(1);
     }
 
     Logger.info(`Container: ${latestDeployment.containerId.substring(0, 12)}`);
-
-    // Connect to SSH
-    const sshConfig: SSHConnectionConfig = {
-      host: config.server.host,
-      username: config.server.user,
-      privateKeyPath: config.server.ssh_key,
-      port: config.server.port,
-    };
-
-    const ssh = new SSHClient(sshConfig);
-    await ssh.connect();
 
     // Fetch logs
     const docker = new DockerManager(ssh, config.app.name);
@@ -49,9 +41,9 @@ export default async function logs(
     Logger.newline();
     Logger.raw(logOutput);
 
-    // Cleanup
-    ssh.disconnect();
+    // Cleanup (Redis first: it runs over the SSH tunnel)
     redis.disconnect();
+    ssh.disconnect();
   } catch (error) {
     Logger.error(
       `Logs command failed: ${error instanceof Error ? error.message : 'Unknown error'}`,

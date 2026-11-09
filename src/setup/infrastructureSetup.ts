@@ -1,9 +1,25 @@
+import crypto from 'node:crypto';
 import { SSHClient } from '../ssh/sshClient';
 import { Logger } from '../utils/logger';
+import { shellEscape } from '../utils/shell';
+
+/** Port Redis listens on, bound to the VPS loopback interface only. */
+export const REDIS_PORT = 6379;
+/** Redis password file on the VPS, relative to the deploy user's home (mode 600). */
+export const REDIS_PASSWORD_FILE = '.orca/redis.pass';
+/** Redis config file on the VPS, relative to the deploy user's home. */
+const REDIS_CONFIG_FILE = '.orca/redis.conf';
+/**
+ * Bumped whenever the Redis container's security settings change, so older
+ * containers are detected and re-created on the next deploy.
+ */
+const REDIS_SECURITY_VERSION = '1';
 
 export interface InfrastructureStatus {
   traefikRunning: boolean;
   redisRunning: boolean;
+  /** Redis is running with the current security settings (loopback-only, password) */
+  redisSecure: boolean;
   networkExists: boolean;
 }
 
@@ -21,17 +37,21 @@ export class InfrastructureSetup {
   async checkStatus(): Promise<InfrastructureStatus> {
     const [traefikResult, redisResult, networkResult] = await Promise.all([
       this.ssh.exec(
-        `docker ps -q --filter "name=${this.traefikContainerName}" --filter "status=running"`,
+        `docker inspect --format '{{.State.Running}}' ${shellEscape(this.traefikContainerName)}`,
       ),
       this.ssh.exec(
-        `docker ps -q --filter "name=${this.redisContainerName}" --filter "status=running"`,
+        `docker inspect --format '{{.State.Running}} {{index .Config.Labels "orca.redis.secure"}}' ${shellEscape(this.redisContainerName)}`,
       ),
-      this.ssh.exec(`docker network inspect ${this.networkName}`),
+      this.ssh.exec(`docker network inspect ${shellEscape(this.networkName)}`),
     ]);
 
+    const [redisRunningFlag, redisSecurityVersion] = redisResult.stdout.trim().split(/\s+/);
+    const redisRunning = redisResult.success && redisRunningFlag === 'true';
+
     return {
-      traefikRunning: traefikResult.success && traefikResult.stdout.trim().length > 0,
-      redisRunning: redisResult.success && redisResult.stdout.trim().length > 0,
+      traefikRunning: traefikResult.success && traefikResult.stdout.trim() === 'true',
+      redisRunning,
+      redisSecure: redisRunning && redisSecurityVersion === REDIS_SECURITY_VERSION,
       networkExists: networkResult.success,
     };
   }
@@ -47,8 +67,14 @@ export class InfrastructureSetup {
       await this.createNetwork();
     }
 
-    // Start Redis if needed
+    // Start Redis if needed, or re-create it if it predates the security settings
     if (!status.redisRunning) {
+      await this.startRedis();
+    } else if (!status.redisSecure) {
+      Logger.warn(
+        'Redis is running with insecure settings (public port, no password). ' +
+          'Re-creating it bound to localhost with a password; stored data is kept.',
+      );
       await this.startRedis();
     }
 
@@ -104,7 +130,7 @@ export class InfrastructureSetup {
   private async createNetwork(): Promise<void> {
     Logger.info(`Creating Docker network: ${this.networkName}`);
 
-    const result = await this.ssh.exec(`docker network create ${this.networkName}`);
+    const result = await this.ssh.exec(`docker network create ${shellEscape(this.networkName)}`);
 
     if (!result.success) {
       throw new Error(`Failed to create network: ${result.stderr}`);
@@ -114,27 +140,75 @@ export class InfrastructureSetup {
   }
 
   /**
-   * Start Redis container with persistent volume
+   * Make sure the Redis password exists on the VPS and return it.
+   * Generated locally and written over SFTP so it never appears on a command line.
+   */
+  async ensureRedisPassword(): Promise<string> {
+    await this.ensureOrcaDir();
+
+    const existing = await this.ssh.exec(`cat "$HOME/${REDIS_PASSWORD_FILE}" 2>/dev/null`);
+    const current = existing.success ? existing.stdout.trim() : '';
+    if (current) {
+      return current;
+    }
+
+    const password = crypto.randomBytes(32).toString('hex');
+    await this.ssh.writeFile(REDIS_PASSWORD_FILE, `${password}\n`, 0o600);
+    Logger.info(`Generated Redis password (stored in ~/${REDIS_PASSWORD_FILE} on the VPS)`);
+    return password;
+  }
+
+  private async ensureOrcaDir(): Promise<void> {
+    const result = await this.ssh.exec('mkdir -p "$HOME/.orca" && chmod 700 "$HOME/.orca"');
+    if (!result.success) {
+      throw new Error(`Failed to create ~/.orca on the VPS: ${result.stderr}`);
+    }
+  }
+
+  /**
+   * Start Redis container with persistent volume.
+   *
+   * Security:
+   * - published on 127.0.0.1 only; the CLI reaches it through an SSH tunnel
+   * - not attached to the app network, so app containers cannot reach it
+   * - password-protected via a config file (not a command-line flag, which
+   *   would be visible in `ps` to every user on the VPS)
    */
   private async startRedis(): Promise<void> {
     Logger.info('Starting Redis container...');
 
+    const password = await this.ensureRedisPassword();
+
+    // ~/.orca is mode 700, which keeps other VPS users out. The file itself must
+    // be readable by the redis user inside the container, hence 644.
+    await this.ssh.writeFile(
+      REDIS_CONFIG_FILE,
+      [
+        `requirepass ${password}`,
+        'appendonly yes',
+        'maxmemory 256mb',
+        'maxmemory-policy allkeys-lru',
+        '',
+      ].join('\n'),
+      0o644,
+    );
+
     // Create volume if it doesn't exist
-    await this.ssh.exec(`docker volume create ${this.redisVolumeName}`);
+    await this.ssh.exec(`docker volume create ${shellEscape(this.redisVolumeName)}`);
 
-    // Remove any existing stopped container
-    await this.ssh.exec(`docker rm -f ${this.redisContainerName} 2>/dev/null || true`);
+    // Remove any existing container (data lives in the volume)
+    await this.ssh.exec(`docker rm -f ${shellEscape(this.redisContainerName)} 2>/dev/null || true`);
 
-    // Run Redis with volume mount
     const command = [
       'docker run -d',
-      `--name ${this.redisContainerName}`,
-      `--network ${this.networkName}`,
+      `--name ${shellEscape(this.redisContainerName)}`,
       '--restart unless-stopped',
-      `-v ${this.redisVolumeName}:/data`,
-      '-p 6379:6379',
+      `--label orca.redis.secure=${REDIS_SECURITY_VERSION}`,
+      `-v ${shellEscape(this.redisVolumeName)}:/data`,
+      `-v "$HOME/${REDIS_CONFIG_FILE}":/usr/local/etc/redis/redis.conf:ro`,
+      `-p 127.0.0.1:${REDIS_PORT}:6379`,
       'redis:7-alpine',
-      'redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru',
+      'redis-server /usr/local/etc/redis/redis.conf',
     ].join(' ');
 
     const result = await this.ssh.exec(command);
@@ -143,7 +217,7 @@ export class InfrastructureSetup {
       throw new Error(`Failed to start Redis: ${result.stderr}`);
     }
 
-    Logger.success('Redis container started');
+    Logger.success('Redis container started (localhost only, password protected)');
   }
 
   /**
@@ -152,16 +226,20 @@ export class InfrastructureSetup {
   private async startTraefik(): Promise<void> {
     Logger.info('Starting Traefik container...');
 
-    await this.ssh.exec(`docker rm -f ${this.traefikContainerName} 2>/dev/null || true`);
+    await this.ssh.exec(
+      `docker rm -f ${shellEscape(this.traefikContainerName)} 2>/dev/null || true`,
+    );
 
     const result = await this.ssh.exec(
       [
         'docker run -d',
-        `--name ${this.traefikContainerName}`,
-        `--network ${this.networkName}`,
+        `--name ${shellEscape(this.traefikContainerName)}`,
+        `--network ${shellEscape(this.networkName)}`,
         '--restart unless-stopped',
         '-p 80:80',
         '-p 443:443',
+        // Note: even read-only, the Docker socket gives Traefik root-equivalent
+        // access to the host. Traefik is kept off the public dashboard for that reason.
         '-v /var/run/docker.sock:/var/run/docker.sock:ro',
         '-v traefik-certs:/letsencrypt',
         'traefik:v3.0',
@@ -184,26 +262,13 @@ export class InfrastructureSetup {
     Logger.success('Traefik container started');
   }
 
-  getRedisHost(): string {
-    // Redis runs in a container on the same network
-    // Apps can connect via container name or localhost (port exposed)
-    return 'localhost';
-  }
-
   async stopInfrastructure(): Promise<void> {
     Logger.info('Stopping infrastructure containers...');
 
-    await this.ssh.exec(
-      `docker stop ${this.traefikContainerName} ${this.redisContainerName} 2>/dev/null || true`,
-    );
-    await this.ssh.exec(
-      `docker rm ${this.traefikContainerName} ${this.redisContainerName} 2>/dev/null || true`,
-    );
+    const names = `${shellEscape(this.traefikContainerName)} ${shellEscape(this.redisContainerName)}`;
+    await this.ssh.exec(`docker stop ${names} 2>/dev/null || true`);
+    await this.ssh.exec(`docker rm ${names} 2>/dev/null || true`);
 
     Logger.success('Infrastructure stopped');
   }
-}
-
-function shellEscape(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
