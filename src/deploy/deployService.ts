@@ -232,11 +232,12 @@ export class DeployService {
   }
 
   private disconnect(): void {
-    if (this.ssh) {
-      this.ssh.disconnect();
-    }
+    // Redis first: it runs over the SSH tunnel
     if (this.redis) {
       this.redis.disconnect();
+    }
+    if (this.ssh) {
+      this.ssh.disconnect();
     }
   }
 }
