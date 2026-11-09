@@ -1,7 +1,7 @@
-import { loadConfig } from '../config/configLoader';
+import { loadConfig, sshConfigFrom } from '../config/configLoader';
 import { SSHClient } from '../ssh/sshClient';
-import { SSHConnectionConfig } from '../types/config';
 import { Logger } from '../utils/logger';
+import { shellEscape } from '../utils/shell';
 
 interface CheckResult {
   name: string;
@@ -16,16 +16,9 @@ export default async function doctor(configPath?: string): Promise<void> {
   try {
     const config = await loadConfig(configPath);
 
-    const sshConfig: SSHConnectionConfig = {
-      host: config.server.host,
-      username: config.server.user,
-      privateKeyPath: config.server.ssh_key,
-      port: config.server.port,
-    };
-
-    ssh = new SSHClient(sshConfig);
+    ssh = new SSHClient(sshConfigFrom(config));
     await ssh.connect();
-    checks.push({ name: 'SSH connectivity', ok: true });
+    checks.push({ name: 'SSH connectivity (host key verified)', ok: true });
 
     checks.push(await runRemoteCheck(ssh, 'Docker installed', 'command -v docker'));
     checks.push(await runRemoteCheck(ssh, 'Git installed', 'command -v git'));
@@ -42,6 +35,15 @@ export default async function doctor(configPath?: string): Promise<void> {
         ssh,
         'Ports 80/443 available',
         '! (ss -lnt 2>/dev/null | awk "{print \\$4}" | grep -Eq "(:80|:443)$")',
+      ),
+    );
+    // Passes when Redis is not set up yet, or is published on 127.0.0.1 only.
+    checks.push(
+      await runRemoteCheck(
+        ssh,
+        'Redis not exposed to the internet',
+        'out=$(docker port orca-redis 6379/tcp 2>/dev/null) || exit 0; ' +
+          '! printf "%s\\n" "$out" | grep -v "^127\\.0\\.0\\.1:" | grep -q .',
       ),
     );
   } catch (error) {
@@ -83,8 +85,4 @@ async function runRemoteCheck(ssh: SSHClient, name: string, command: string): Pr
     ok: result.success,
     details: result.success ? undefined : result.stderr || result.stdout || 'check failed',
   };
-}
-
-function shellEscape(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
 }

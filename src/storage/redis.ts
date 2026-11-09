@@ -1,34 +1,67 @@
 import Redis from 'ioredis';
 import { DeploymentMetadata } from '../types/config';
+import { SSHClient, Tunnel } from '../ssh/sshClient';
+import { REDIS_PASSWORD_FILE, REDIS_PORT } from '../setup/infrastructureSetup';
 import { Logger } from '../utils/logger';
 
+/**
+ * Deployment state store.
+ *
+ * Redis on the VPS only listens on 127.0.0.1, so the CLI reaches it through an
+ * SSH tunnel over the already-authenticated SSH connection, and authenticates
+ * with the password stored on the VPS. Nothing is exposed to the internet.
+ */
 export class RedisStorage {
   private client: Redis | null = null;
-  private host: string;
-  private port: number;
+  private tunnel: Tunnel | null = null;
+  private ssh: SSHClient;
+  private remotePort: number;
 
-  constructor(host: string = 'localhost', port: number = 6379) {
-    this.host = host;
-    this.port = port;
+  constructor(ssh: SSHClient, remotePort: number = REDIS_PORT) {
+    this.ssh = ssh;
+    this.remotePort = remotePort;
   }
 
   async connect(): Promise<void> {
+    const password = await this.readPassword();
+    this.tunnel = await this.ssh.openTunnel(this.remotePort);
+
     this.client = new Redis({
-      host: this.host,
-      port: this.port,
-      retryStrategy: (times) => Math.min(times * 50, 2000),
+      host: '127.0.0.1',
+      port: this.tunnel.localPort,
+      password,
+      connectTimeout: 10000,
+      maxRetriesPerRequest: 2,
+      // Give up after a few attempts instead of hanging the CLI forever.
+      retryStrategy: (times) => (times > 3 ? null : times * 200),
     });
 
+    // Connection errors during connect() are reported once, below, with a clearer message.
+    let connected = false;
     this.client.on('error', (err: Error) => {
-      Logger.error(`Redis error: ${err.message}`);
+      if (connected) Logger.error(`Redis error: ${err.message}`);
     });
 
-    this.client.on('connect', () => {
-      Logger.info(`Connected to Redis at ${this.host}:${this.port}`);
-    });
+    try {
+      await this.client.ping();
+    } catch (error) {
+      this.disconnect();
+      throw new Error(
+        'Could not reach Redis on the VPS through SSH. Is the orca-redis container running? ' +
+          'Run "orca deploy" to set it up' +
+          (error instanceof Error ? ` (details: ${error.message})` : ''),
+      );
+    }
+    connected = true;
 
-    // Wait for connection
-    await this.client.ping();
+    Logger.info('Connected to Redis (via SSH tunnel)');
+  }
+
+  /** Read the Redis password from the VPS. Missing on servers set up by older Orca versions. */
+  private async readPassword(): Promise<string | undefined> {
+    const result = await this.ssh.exec(`cat "$HOME/${REDIS_PASSWORD_FILE}" 2>/dev/null`);
+    const password = result.success ? result.stdout.trim() : '';
+    return password || undefined;
   }
 
   async saveDeployment(deployment: DeploymentMetadata): Promise<void> {
@@ -122,7 +155,12 @@ export class RedisStorage {
   disconnect(): void {
     if (this.client) {
       this.client.disconnect();
+      this.client = null;
       Logger.info('Disconnected from Redis');
+    }
+    if (this.tunnel) {
+      this.tunnel.close();
+      this.tunnel = null;
     }
   }
 
