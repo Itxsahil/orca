@@ -239,15 +239,19 @@ export class SSHClient {
     const server = net.createServer((socket) => {
       sockets.add(socket);
       socket.on('close', () => sockets.delete(socket));
+      // Attach before anything can fail: an unhandled socket 'error' crashes the process.
+      socket.on('error', () => {});
 
       this.client.forwardOut('127.0.0.1', 0, remoteHost, remotePort, (err, stream) => {
         if (err) {
-          socket.destroy(err);
+          // e.g. nothing listening on the remote port: the server refuses the channel.
+          // Closing the local socket lets the client (ioredis) report a normal error.
+          socket.destroy();
           return;
         }
-        socket.pipe(stream).pipe(socket);
         stream.on('error', () => socket.destroy());
         socket.on('error', () => stream.destroy());
+        socket.pipe(stream).pipe(socket);
       });
     });
 

@@ -36,8 +36,10 @@ export class RedisStorage {
       retryStrategy: (times) => (times > 3 ? null : times * 200),
     });
 
+    // Connection errors during connect() are reported once, below, with a clearer message.
+    let connected = false;
     this.client.on('error', (err: Error) => {
-      Logger.error(`Redis error: ${err.message}`);
+      if (connected) Logger.error(`Redis error: ${err.message}`);
     });
 
     try {
@@ -45,11 +47,12 @@ export class RedisStorage {
     } catch (error) {
       this.disconnect();
       throw new Error(
-        `Could not reach Redis on the VPS through SSH (${
-          error instanceof Error ? error.message : 'unknown error'
-        }). Run "orca deploy" once to set up the server.`,
+        'Could not reach Redis on the VPS through SSH. Is the orca-redis container running? ' +
+          'Run "orca deploy" to set it up' +
+          (error instanceof Error ? ` (details: ${error.message})` : ''),
       );
     }
+    connected = true;
 
     Logger.info('Connected to Redis (via SSH tunnel)');
   }
