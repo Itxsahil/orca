@@ -7,6 +7,9 @@ import { LoginPage } from './pages/LoginPage';
 import { InvitePage } from './pages/InvitePage';
 import { AdminPage } from './pages/AdminPage';
 import { HomePage } from './pages/HomePage';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
+import { ModeToggle } from '@/components/mode-toggle';
 
 export function App() {
   const path = usePathname();
@@ -37,12 +40,19 @@ export function App() {
 
   if (status.isError || me.isError) {
     return (
-      <main className="center">
-        <p className="error">Cannot reach the API.</p>
+      <main className="grid min-h-svh place-items-center p-4">
+        <Alert variant="destructive" className="w-full max-w-sm">
+          <AlertTitle>Cannot reach the API</AlertTitle>
+          <AlertDescription>Check that the API is running, then reload the page.</AlertDescription>
+        </Alert>
       </main>
     );
   }
-  if (status.isPending || me.isPending) return <main className="center muted">Loading…</main>;
+  if (status.isPending || me.isPending) {
+    return (
+      <main className="grid min-h-svh place-items-center text-muted-foreground">Loading…</main>
+    );
+  }
 
   let page;
   if (inviteToken) page = <InvitePage token={inviteToken} />;
@@ -53,19 +63,31 @@ export function App() {
   else page = null;
 
   return (
-    <>
-      {user && (
-        <header className="topbar">
-          <strong>Video Platform</strong>
-          <span className="muted">
-            {user.name} · {user.isPlatformAdmin ? 'Platform admin' : 'Owner'}
-          </span>
-          <button className="ghost" onClick={() => logout.mutate({})} disabled={logout.isPending}>
-            Log out
-          </button>
+    <div className="min-h-svh bg-background text-foreground">
+      {user ? (
+        <header className="border-b">
+          <div className="mx-auto flex h-14 w-full max-w-3xl items-center gap-3 px-4">
+            <strong className="font-heading text-sm font-semibold">Video Platform</strong>
+            <span className="ml-auto text-sm text-muted-foreground">
+              {user.name} · {user.isPlatformAdmin ? 'Platform admin' : 'Owner'}
+            </span>
+            <ModeToggle />
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => logout.mutate({})}
+              disabled={logout.isPending}
+            >
+              Log out
+            </Button>
+          </div>
         </header>
+      ) : (
+        <div className="fixed top-3 right-3 z-50">
+          <ModeToggle />
+        </div>
       )}
       {page}
-    </>
+    </div>
   );
 }

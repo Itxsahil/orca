@@ -1,8 +1,26 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { OrgSummary } from '@repo/contract';
-import { orpc } from '../orpc';
-import { errorMessage } from '../errors';
+import { orpc } from '@/orpc';
+import { errorMessage } from '@/errors';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+
+type InviteStatus = OrgSummary['invites'][number]['status'];
+
+const STATUS_BADGE: Record<
+  InviteStatus,
+  { variant: 'outline' | 'destructive'; className: string }
+> = {
+  pending: { variant: 'outline', className: 'border-warn/40 text-warn' },
+  accepted: { variant: 'outline', className: 'border-ok/40 text-ok' },
+  revoked: { variant: 'destructive', className: '' },
+  expired: { variant: 'destructive', className: '' },
+};
 
 /** Platform admin: create organizations and hand out owner invite links. */
 export function AdminPage() {
@@ -41,38 +59,58 @@ export function AdminPage() {
   const error = create.error ?? reinvite.error ?? revoke.error ?? orgs.error;
 
   return (
-    <main className="page">
-      <h1>Organizations</h1>
+    <main className="mx-auto w-full max-w-3xl px-4 py-10">
+      <h1 className="font-heading text-2xl font-semibold tracking-tight">Organizations</h1>
+      <p className="mt-1 text-sm text-muted-foreground">
+        Create an organization and invite its owner.
+      </p>
 
-      <form className="card row-form" onSubmit={submit}>
-        <label>
-          Organization name
-          <input
-            required
-            value={form.name}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
-          />
-        </label>
-        <label>
-          Owner email
-          <input
-            required
-            type="email"
-            value={form.ownerEmail}
-            onChange={(e) => setForm({ ...form, ownerEmail: e.target.value })}
-          />
-        </label>
-        <button type="submit" disabled={create.isPending}>
-          Create + invite
-        </button>
-      </form>
+      <Card className="mt-6">
+        <CardContent>
+          <form className="grid gap-4 sm:grid-cols-[1fr_1fr_auto] sm:items-end" onSubmit={submit}>
+            <div className="grid gap-2">
+              <Label htmlFor="org-name">Organization name</Label>
+              <Input
+                id="org-name"
+                required
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="owner-email">Owner email</Label>
+              <Input
+                id="owner-email"
+                required
+                type="email"
+                value={form.ownerEmail}
+                onChange={(e) => setForm({ ...form, ownerEmail: e.target.value })}
+              />
+            </div>
+            <Button type="submit" disabled={create.isPending}>
+              Create + invite
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
 
       {lastLink && <InviteLink {...lastLink} onClose={() => setLastLink(null)} />}
-      {error && <p className="error">{errorMessage(error)}</p>}
 
-      {orgs.isPending && <p className="muted">Loading…</p>}
-      {orgs.data?.length === 0 && <p className="muted">No organizations yet.</p>}
-      <div className="list">
+      {error && (
+        <Alert variant="destructive" className="mt-4">
+          <AlertDescription>{errorMessage(error)}</AlertDescription>
+        </Alert>
+      )}
+
+      <div className="mt-8 grid gap-3">
+        {orgs.isPending && <p className="text-sm text-muted-foreground">Loading…</p>}
+        {orgs.data?.length === 0 && (
+          <Card>
+            <CardContent className="py-8 text-center text-sm text-muted-foreground">
+              No organizations yet.
+            </CardContent>
+          </Card>
+        )}
         {orgs.data?.map((org) => (
           <OrgCard
             key={org.id}
@@ -96,38 +134,53 @@ function OrgCard({
   onRevoke: (inviteId: string) => void;
 }) {
   const latest = org.invites[0];
+  const badge = latest ? STATUS_BADGE[latest.status] : null;
+
   return (
-    <article className="card">
-      <div className="org-head">
-        <strong>{org.name}</strong>
-        <span className="muted">created {org.createdAt.toLocaleDateString()}</span>
-      </div>
-      {org.owners.length > 0 ? (
-        <p>Owner: {org.owners.map((o) => `${o.name} <${o.email}>`).join(', ')}</p>
-      ) : latest ? (
-        <div className="invite-row">
-          <span>
-            Invite to {latest.email}:{' '}
-            <span className={`status ${latest.status}`}>{latest.status}</span>
-            {latest.status === 'pending' && (
-              <span className="muted"> · expires {latest.expiresAt.toLocaleDateString()}</span>
-            )}
-          </span>
-          <span className="actions">
-            {latest.status === 'pending' && (
-              <button className="ghost" onClick={() => onRevoke(latest.id)}>
-                Revoke
-              </button>
-            )}
-            <button className="ghost" onClick={() => onReinvite(latest.email)}>
-              New link
-            </button>
-          </span>
+    <Card>
+      <CardHeader className="flex flex-row items-start justify-between gap-3">
+        <div className="grid gap-0.5">
+          <CardTitle>{org.name}</CardTitle>
+          <CardDescription>Created {org.createdAt.toLocaleDateString()}</CardDescription>
         </div>
-      ) : (
-        <p className="muted">No owner and no invite.</p>
-      )}
-    </article>
+        {latest && badge && (
+          <Badge variant={badge.variant} className={`capitalize ${badge.className}`}>
+            {latest.status}
+          </Badge>
+        )}
+      </CardHeader>
+      <CardContent>
+        {org.owners.length > 0 ? (
+          <p className="text-sm">
+            Owner: {org.owners.map((o) => `${o.name} <${o.email}>`).join(', ')}
+          </p>
+        ) : latest ? (
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm">
+              Invite to {latest.email}
+              {latest.status === 'pending' && (
+                <span className="text-muted-foreground">
+                  {' '}
+                  · expires {latest.expiresAt.toLocaleDateString()}
+                </span>
+              )}
+            </p>
+            <div className="flex gap-1">
+              {latest.status === 'pending' && (
+                <Button variant="ghost" size="sm" onClick={() => onRevoke(latest.id)}>
+                  Revoke
+                </Button>
+              )}
+              <Button variant="outline" size="sm" onClick={() => onReinvite(latest.email)}>
+                New link
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">No owner and no invite.</p>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -138,20 +191,30 @@ function InviteLink({ label, url, onClose }: { label: string; url: string; onClo
     setCopied(true);
   };
   return (
-    <div className="card notice" role="status">
-      <strong>{label}</strong>
-      <p className="muted">
-        Send this link to the owner. It is shown only once and works one time.
-      </p>
-      <div className="copy-row">
-        <input readOnly value={url} onFocus={(e) => e.target.select()} aria-label="Invite link" />
-        <button type="button" onClick={copy}>
-          {copied ? 'Copied' : 'Copy'}
-        </button>
-        <button type="button" className="ghost" onClick={onClose}>
-          Done
-        </button>
-      </div>
-    </div>
+    <Card className="mt-4 border-primary/40">
+      <CardHeader>
+        <CardTitle className="text-base">{label}</CardTitle>
+        <CardDescription>
+          Send this link to the owner. It is shown only once and works one time.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2 sm:flex-row">
+        <Input
+          readOnly
+          value={url}
+          onFocus={(e) => e.target.select()}
+          aria-label="Invite link"
+          className="font-mono text-xs"
+        />
+        <div className="flex gap-2">
+          <Button type="button" onClick={copy}>
+            {copied ? 'Copied' : 'Copy'}
+          </Button>
+          <Button type="button" variant="ghost" onClick={onClose}>
+            Done
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }

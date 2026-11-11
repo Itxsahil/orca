@@ -1,8 +1,13 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { orpc } from '../orpc';
-import { errorMessage } from '../errors';
+import { orpc } from '@/orpc';
+import { errorMessage } from '@/errors';
 import { useSignedIn } from './useSignedIn';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 
 /** First run only: creates the platform admin (must match PLATFORM_ADMIN_EMAIL). */
 export function SetupPage() {
@@ -16,47 +21,60 @@ export function SetupPage() {
   };
 
   return (
-    <main className="center">
-      <form className="card" onSubmit={submit}>
-        <h1>Set up the platform</h1>
-        <p className="muted">
-          Create the platform admin account. Use the email set in PLATFORM_ADMIN_EMAIL.
-        </p>
-        <label>
-          Name
-          <input
-            required
-            value={form.name}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
-            autoComplete="name"
-          />
-        </label>
-        <label>
-          Email
-          <input
-            required
-            type="email"
-            value={form.email}
-            onChange={(e) => setForm({ ...form, email: e.target.value })}
-            autoComplete="email"
-          />
-        </label>
-        <label>
-          Password
-          <input
-            required
-            type="password"
-            minLength={8}
-            value={form.password}
-            onChange={(e) => setForm({ ...form, password: e.target.value })}
-            autoComplete="new-password"
-          />
-        </label>
-        {setup.error && <p className="error">{errorMessage(setup.error)}</p>}
-        <button type="submit" disabled={setup.isPending}>
-          {setup.isPending ? 'Creating…' : 'Create admin account'}
-        </button>
-      </form>
+    <main className="grid min-h-svh place-items-center p-4">
+      <Card className="w-full max-w-sm">
+        <CardHeader>
+          <CardTitle className="text-xl">Set up the platform</CardTitle>
+          <CardDescription>
+            Create the platform admin account. Use the email set in PLATFORM_ADMIN_EMAIL.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form className="grid gap-4" onSubmit={submit}>
+            <div className="grid gap-2">
+              <Label htmlFor="name">Name</Label>
+              <Input
+                id="name"
+                required
+                autoComplete="name"
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="email">Email</Label>
+              <Input
+                id="email"
+                type="email"
+                required
+                autoComplete="email"
+                value={form.email}
+                onChange={(e) => setForm({ ...form, email: e.target.value })}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="password">Password</Label>
+              <Input
+                id="password"
+                type="password"
+                required
+                minLength={8}
+                autoComplete="new-password"
+                value={form.password}
+                onChange={(e) => setForm({ ...form, password: e.target.value })}
+              />
+            </div>
+            {setup.error && (
+              <Alert variant="destructive">
+                <AlertDescription>{errorMessage(setup.error)}</AlertDescription>
+              </Alert>
+            )}
+            <Button type="submit" className="w-full" disabled={setup.isPending}>
+              {setup.isPending ? 'Creating…' : 'Create admin account'}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
     </main>
   );
 }

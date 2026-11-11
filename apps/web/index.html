@@ -4,6 +4,24 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Video Platform</title>
+    <script>
+      // Apply the stored theme ("light" | "dark" | "system") before first paint.
+      (() => {
+        let stored = null;
+        try {
+          stored = localStorage.getItem('vite-ui-theme');
+        } catch {
+          // Storage unavailable: fall back to the OS preference.
+        }
+        const dark =
+          stored === 'light'
+            ? false
+            : stored === 'system'
+              ? matchMedia('(prefers-color-scheme: dark)').matches
+              : true; // matches ThemeProvider's defaultTheme="dark"
+        document.documentElement.classList.toggle('dark', dark);
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

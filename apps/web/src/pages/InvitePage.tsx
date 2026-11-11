@@ -1,8 +1,13 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { orpc } from '../orpc';
-import { errorMessage } from '../errors';
+import { orpc } from '@/orpc';
+import { errorMessage } from '@/errors';
 import { useSignedIn } from './useSignedIn';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 
 export function InvitePage({ token }: { token: string }) {
   const signedIn = useSignedIn();
@@ -13,15 +18,30 @@ export function InvitePage({ token }: { token: string }) {
   });
   const accept = useMutation(orpc.invites.accept.mutationOptions({ onSuccess: signedIn }));
 
-  if (preview.isPending) return <main className="center muted">Checking your invite…</main>;
+  if (preview.isPending) {
+    return (
+      <main className="grid min-h-svh place-items-center text-muted-foreground">
+        Checking your invite…
+      </main>
+    );
+  }
   if (preview.isError) {
     return (
-      <main className="center">
-        <div className="card">
-          <h1>Invite unavailable</h1>
-          <p className="error">{errorMessage(preview.error)}</p>
-          <a href="/login">Go to log in</a>
-        </div>
+      <main className="grid min-h-svh place-items-center p-4">
+        <Card className="w-full max-w-sm">
+          <CardHeader>
+            <CardTitle className="text-xl">Invite unavailable</CardTitle>
+            <CardDescription>This link cannot be used to create an account.</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-4">
+            <Alert variant="destructive">
+              <AlertDescription>{errorMessage(preview.error)}</AlertDescription>
+            </Alert>
+            <Button asChild variant="outline" className="w-full">
+              <a href="/login">Go to log in</a>
+            </Button>
+          </CardContent>
+        </Card>
       </main>
     );
   }
@@ -32,39 +52,51 @@ export function InvitePage({ token }: { token: string }) {
   };
 
   return (
-    <main className="center">
-      <form className="card" onSubmit={submit}>
-        <h1>Join {preview.data.orgName}</h1>
-        <p className="muted">You have been invited as the organization owner.</p>
-        <label>
-          Email
-          <input value={preview.data.email} disabled />
-        </label>
-        <label>
-          Your name
-          <input
-            required
-            value={form.name}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
-            autoComplete="name"
-          />
-        </label>
-        <label>
-          Choose a password
-          <input
-            required
-            type="password"
-            minLength={8}
-            value={form.password}
-            onChange={(e) => setForm({ ...form, password: e.target.value })}
-            autoComplete="new-password"
-          />
-        </label>
-        {accept.error && <p className="error">{errorMessage(accept.error)}</p>}
-        <button type="submit" disabled={accept.isPending}>
-          {accept.isPending ? 'Creating account…' : 'Create account'}
-        </button>
-      </form>
+    <main className="grid min-h-svh place-items-center p-4">
+      <Card className="w-full max-w-sm">
+        <CardHeader>
+          <CardTitle className="text-xl">Join {preview.data.orgName}</CardTitle>
+          <CardDescription>You have been invited as the organization owner.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form className="grid gap-4" onSubmit={submit}>
+            <div className="grid gap-2">
+              <Label htmlFor="email">Email</Label>
+              <Input id="email" value={preview.data.email} disabled />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="name">Your name</Label>
+              <Input
+                id="name"
+                required
+                autoComplete="name"
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="password">Choose a password</Label>
+              <Input
+                id="password"
+                type="password"
+                required
+                minLength={8}
+                autoComplete="new-password"
+                value={form.password}
+                onChange={(e) => setForm({ ...form, password: e.target.value })}
+              />
+            </div>
+            {accept.error && (
+              <Alert variant="destructive">
+                <AlertDescription>{errorMessage(accept.error)}</AlertDescription>
+              </Alert>
+            )}
+            <Button type="submit" className="w-full" disabled={accept.isPending}>
+              {accept.isPending ? 'Creating account…' : 'Create account'}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
     </main>
   );
 }
