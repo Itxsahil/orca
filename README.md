@@ -22,6 +22,39 @@ npm run dev                 # api on :3000, web on :5173 (proxies /rpc to the ap
 
 Open http://localhost:5173: it calls the `health` procedure and shows whether the API and database are up.
 
+## Auth
+
+Invite-only, email + password, written with Node's built-in `crypto` (no auth library).
+
+**Roles:** one **platform admin** (you) and **organization owners** (clients). Membership roles live in
+`memberships.role`; add `admin` / `member` there when needed.
+
+**Flow**
+
+1. Set `PLATFORM_ADMIN_EMAIL`. On first run the app opens `/setup`; only that email can create the
+   admin account, and only once.
+2. On `/admin`, create an organization with its owner's email. You get a one-time invite link to
+   send yourself (no email service needed).
+3. The owner opens `/invite/<token>`, picks a name and password, and is logged in as owner.
+4. Everyone logs in at `/login`.
+
+**Settings:** `SIGNUP_MODE=invite` (default) or `closed` (no new accounts, even with a link),
+`SESSION_TTL_DAYS` (30), `INVITE_TTL_DAYS` (7), `COOKIE_SECURE` (on in production), `TRUST_PROXY`.
+
+**How it is secured**
+
+- Passwords: scrypt (N=2^15, r=8, p=1) with a random salt, compared in constant time.
+- Sessions: random 256-bit token in an `HttpOnly`, `SameSite=Lax` cookie (`__Host-` prefixed and
+  `Secure` in production). Only its SHA-256 is stored, in `sessions`.
+- Invite links: random 256-bit token, only its hash stored, single-use, expire, revocable; issuing
+  a new link for the same email revokes the previous one.
+- CSRF: the API requires the `x-csrf-token` header that the web client sends.
+- Login: same error and similar timing for unknown email vs wrong password; in-memory rate limits
+  (move them to Postgres/Redis when running several API instances).
+- Races: one platform admin is enforced by a unique index; accepting an invite locks its row.
+
+In procedures, use the `authed` and `platformAdmin` middleware from `apps/api/src/router.ts`.
+
 ## Adding a procedure
 
 1. Describe it in `packages/contract/src/index.ts` (input/output with zod).
