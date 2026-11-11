@@ -55,6 +55,27 @@ Invite-only, email + password, written with Node's built-in `crypto` (no auth li
 
 In procedures, use the `authed` and `platformAdmin` middleware from `apps/api/src/router.ts`.
 
+## Routing (web)
+
+[TanStack Router](https://tanstack.com/router) with file-based routes in `apps/web/src/routes`.
+The Vite plugin regenerates `src/routeTree.gen.ts` whenever a route file changes (don't edit it).
+
+```
+routes/
+  __root.tsx            error page (API unreachable) and 404
+  index.tsx             "/" redirects to /setup, /login, /admin or /home
+  _guest.tsx            layout for logged-out pages
+    _guest/setup.tsx      first-run admin setup (only while no admin exists)
+    _guest/login.tsx
+    _guest/invite/$token.tsx
+  _app.tsx              layout + guard: must be logged in; gives children `context.me`
+    _app/admin.tsx        platform admin only; preloads the org list
+    _app/home.tsx
+```
+
+Guards live in each route's `beforeLoad` and read auth state from the TanStack Query cache
+(`src/lib/auth.ts`). Links and params are typed: `<Link to="/invite/$token" params={{ token }}>`.
+
 ## Adding a procedure
 
 1. Describe it in `packages/contract/src/index.ts` (input/output with zod).

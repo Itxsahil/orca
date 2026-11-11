@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
+import { Link } from '@tanstack/react-router';
 import { orpc } from '@/orpc';
 import { errorMessage } from '@/errors';
 import { useSignedIn } from './useSignedIn';
@@ -38,7 +39,7 @@ export function InvitePage({ token }: { token: string }) {
               <AlertDescription>{errorMessage(preview.error)}</AlertDescription>
             </Alert>
             <Button asChild variant="outline" className="w-full">
-              <a href="/login">Go to log in</a>
+              <Link to="/login">Go to log in</Link>
             </Button>
           </CardContent>
         </Card>
