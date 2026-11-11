@@ -21,6 +21,8 @@ import { getDummyHash, hashPassword, verifyPassword } from './auth/password';
 import { rateLimit } from './auth/rate-limit';
 import { endSession, getSessionUser, startSession } from './auth/session';
 import { hashToken, newToken } from './auth/tokens';
+import { renderInviteEmail } from './email/invite-email';
+import { sendEmail } from './email/send';
 
 const os = implement(contract).$context<Context>();
 
@@ -114,6 +116,20 @@ async function createInvite(db: DbOrTx, orgId: string, email: string, invitedBy:
     .values({ orgId, email, role: 'owner', tokenHash: hashToken(token), expiresAt, invitedBy })
     .returning({ id: invitations.id });
   return { inviteId: invite!.id, inviteUrl: `${env.APP_URL}/invite/${token}`, expiresAt };
+}
+
+/** Emails an invite link. Never throws: a failed email still leaves a working, copyable link. */
+async function emailInvite(input: {
+  to: string;
+  orgName: string;
+  inviterName: string;
+  inviteUrl: string;
+  expiresAt: Date;
+}) {
+  const result = await sendEmail(renderInviteEmail(input));
+  return result.sent
+    ? { emailSent: true, emailError: null }
+    : { emailSent: false, emailError: result.error };
 }
 
 const isUniqueViolation = (err: unknown) =>
@@ -314,23 +330,40 @@ export const router = os.router({
       }),
 
       create: os.admin.orgs.create.use(platformAdmin).handler(async ({ input, context }) => {
-        return context.db.transaction(async (tx) => {
+        const created = await context.db.transaction(async (tx) => {
           const [org] = await tx.insert(organizations).values({ name: input.name }).returning();
           const invite = await createInvite(tx, org!.id, input.ownerEmail, context.user.id);
           return { orgId: org!.id, ...invite };
         });
+        // Only after the transaction committed: never email a link that was rolled back.
+        const email = await emailInvite({
+          to: input.ownerEmail,
+          orgName: input.name,
+          inviterName: context.user.name,
+          inviteUrl: created.inviteUrl,
+          expiresAt: created.expiresAt,
+        });
+        return { ...created, ...email };
       }),
     },
 
     invites: {
       create: os.admin.invites.create.use(platformAdmin).handler(async ({ input, context }) => {
         const [org] = await context.db
-          .select({ id: organizations.id })
+          .select({ id: organizations.id, name: organizations.name })
           .from(organizations)
           .where(eq(organizations.id, input.orgId))
           .limit(1);
         if (!org) throw new ORPCError('NOT_FOUND', { message: 'Organization not found.' });
-        return createInvite(context.db, org.id, input.email, context.user.id);
+        const invite = await createInvite(context.db, org.id, input.email, context.user.id);
+        const email = await emailInvite({
+          to: input.email,
+          orgName: org.name,
+          inviterName: context.user.name,
+          inviteUrl: invite.inviteUrl,
+          expiresAt: invite.expiresAt,
+        });
+        return { ...invite, ...email };
       }),
 
       revoke: os.admin.invites.revoke.use(platformAdmin).handler(async ({ input, context }) => {

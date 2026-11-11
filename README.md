@@ -38,6 +38,13 @@ Invite-only, email + password, written with Node's built-in `crypto` (no auth li
 3. The owner opens `/invite/<token>`, picks a name and password, and is logged in as owner.
 4. Everyone logs in at `/login`.
 
+**Invite emails:** when `RESEND_API_KEY` is set, creating an organization (or a new link) also
+emails the invite, sent from `EMAIL_FROM` through Resend's HTTP API (`apps/api/src/email/`). The
+template follows the web theme, light or dark per the reader's mail app. Without a key, or if
+sending fails, the invite is still created and `/admin` shows why, with the link to copy.
+Resend's test sender `onboarding@resend.dev` can only email your own Resend address: verify a
+domain to email clients.
+
 **Settings:** `SIGNUP_MODE=invite` (default) or `closed` (no new accounts, even with a link),
 `SESSION_TTL_DAYS` (30), `INVITE_TTL_DAYS` (7), `COOKIE_SECURE` (on in production), `TRUST_PROXY`.
 

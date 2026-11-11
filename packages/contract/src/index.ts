@@ -45,6 +45,10 @@ export const CreatedInviteSchema = z.object({
   inviteId: z.uuid(),
   inviteUrl: z.string(),
   expiresAt: z.date(),
+  /** Whether the invite email went out. The link works either way. */
+  emailSent: z.boolean(),
+  /** Why the email was not sent (not configured, provider error), when emailSent is false. */
+  emailError: z.string().nullable(),
 });
 
 export const contract = {

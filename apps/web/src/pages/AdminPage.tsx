@@ -27,13 +27,19 @@ export function AdminPage() {
   const queryClient = useQueryClient();
   const orgs = useQuery(orpc.admin.orgs.list.queryOptions());
   const [form, setForm] = useState({ name: '', ownerEmail: '' });
-  const [lastLink, setLastLink] = useState<{ label: string; url: string } | null>(null);
+  const [lastLink, setLastLink] = useState<InviteLinkProps | null>(null);
   const refresh = () => queryClient.invalidateQueries({ queryKey: orpc.admin.key() });
 
   const create = useMutation(
     orpc.admin.orgs.create.mutationOptions({
       onSuccess: (res, vars) => {
-        setLastLink({ label: `Invite for ${vars.ownerEmail} (${vars.name})`, url: res.inviteUrl });
+        setLastLink({
+          label: `Invite for ${vars.ownerEmail} (${vars.name})`,
+          url: res.inviteUrl,
+          email: vars.ownerEmail,
+          emailSent: res.emailSent,
+          emailError: res.emailError,
+        });
         setForm({ name: '', ownerEmail: '' });
         void refresh();
       },
@@ -42,7 +48,13 @@ export function AdminPage() {
   const reinvite = useMutation(
     orpc.admin.invites.create.mutationOptions({
       onSuccess: (res, vars) => {
-        setLastLink({ label: `New invite for ${vars.email}`, url: res.inviteUrl });
+        setLastLink({
+          label: `New invite for ${vars.email}`,
+          url: res.inviteUrl,
+          email: vars.email,
+          emailSent: res.emailSent,
+          emailError: res.emailError,
+        });
         void refresh();
       },
     }),
@@ -184,7 +196,22 @@ function OrgCard({
   );
 }
 
-function InviteLink({ label, url, onClose }: { label: string; url: string; onClose: () => void }) {
+interface InviteLinkProps {
+  label: string;
+  url: string;
+  email: string;
+  emailSent: boolean;
+  emailError: string | null;
+}
+
+function InviteLink({
+  label,
+  url,
+  email,
+  emailSent,
+  emailError,
+  onClose,
+}: InviteLinkProps & { onClose: () => void }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
     await navigator.clipboard.writeText(url);
@@ -195,9 +222,18 @@ function InviteLink({ label, url, onClose }: { label: string; url: string; onClo
       <CardHeader>
         <CardTitle className="text-base">{label}</CardTitle>
         <CardDescription>
-          Send this link to the owner. It is shown only once and works one time.
+          {emailSent
+            ? `Invite emailed to ${email}. You can also copy the link below; it is shown only once and works one time.`
+            : 'Send this link to the owner. It is shown only once and works one time.'}
         </CardDescription>
       </CardHeader>
+      {!emailSent && emailError && (
+        <CardContent>
+          <Alert>
+            <AlertDescription>The invite email was not sent: {emailError}</AlertDescription>
+          </Alert>
+        </CardContent>
+      )}
       <CardContent className="flex flex-col gap-2 sm:flex-row">
         <Input
           readOnly
