@@ -1,0 +1,38 @@
+:root {
+  --bg: #0f1117;
+  --fg: #e6e8ef;
+  --muted: #8b90a0;
+  --ok: #4ade80;
+  --bad: #f87171;
+  color-scheme: dark;
+  font:
+    15px/1.5 ui-sans-serif,
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    sans-serif;
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+}
+.page {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 40px 16px;
+}
+h1 {
+  margin: 0 0 4px;
+  font-size: 24px;
+}
+.muted {
+  color: var(--muted);
+  margin-top: 0;
+}
+.ok {
+  color: var(--ok);
+}
+.bad {
+  color: var(--bad);
+}

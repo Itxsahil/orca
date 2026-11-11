@@ -1,0 +1,27 @@
+{
+  "name": "video-platform",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c blue,green \"npm run dev -w @repo/api\" \"npm run dev -w @repo/web\"",
+    "build": "npm run build -w @repo/api && npm run build -w @repo/web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "db:generate": "npm run generate -w @repo/db --",
+    "db:migrate": "npm run migrate -w @repo/db",
+    "db:studio": "npm run studio -w @repo/db",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.7",
+    "prettier": "^3.9.10",
+    "typescript": "~5.9.3"
+  }
+}
