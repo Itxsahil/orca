@@ -1,0 +1,2 @@
+# Copy to .dev.vars for `npm run dev`. Must match UPLOAD_WORKER_SECRET in the API's .env.
+UPLOAD_WORKER_SECRET=dev-only-upload-worker-secret-change-me

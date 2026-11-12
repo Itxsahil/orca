@@ -1,0 +1,17 @@
+# Upload Worker: the public host for the Stream-compatible API and upload URLs.
+# Video bytes go client → this Worker → R2 (presigned URLs from the API);
+# they never pass through the API server.
+name = "video-upload"
+main = "src/index.ts"
+compatibility_date = "2026-07-01"
+
+[vars]
+# Where the API server is reachable from the Worker. In production use a hostname
+# that is not routed to this Worker (e.g. origin-api.example.com).
+API_ORIGIN = "http://localhost:3000"
+
+# Secret, not a var: `wrangler secret put UPLOAD_WORKER_SECRET` (and .dev.vars locally).
+# Must equal the API's UPLOAD_WORKER_SECRET.
+
+# Production routes, for example:
+# routes = [{ pattern = "stream.example.com", custom_domain = true }]

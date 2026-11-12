@@ -20,25 +20,15 @@ import type { Redis } from '../redis';
 import { isVideoUid } from './ids';
 import { fail, ok, toStreamVideo } from './stream-format';
 import { metadataToVideoInput, parseUploadMetadata } from './tus-metadata';
-import {
-  BASIC_UPLOAD_MAX,
-  createPendingVideo,
-  deleteVideo,
-  UploadError,
-  uploadWholeFile,
-} from './upload-core';
-import {
-  basicUploadUrl,
-  clientGone,
-  receiveFormFile,
-  setTusHeaders,
-  tusUploadUrl,
-} from './upload-router';
+import { BASIC_UPLOAD_MAX, createPendingVideo, deleteVideo, UploadError } from './upload-core';
+import { basicUploadUrl, tusUploadUrl } from './urls';
 
 /*
  * Cloudflare Stream-compatible API. Switching from Stream means changing the
- * host to API_PUBLIC_URL, the account id to the organization id and the token
- * to one of our API tokens:
+ * host to STREAM_PUBLIC_URL, the account id to the organization id and the token
+ * to one of our API tokens. Clients reach it through the upload Worker, which
+ * handles requests that carry video bytes (basic uploads) itself and passes
+ * everything else on to these routes:
  *   POST   /client/v4/accounts/:accountId/stream                  basic upload (form) or tus creation
  *   POST   /client/v4/accounts/:accountId/stream/direct_upload    one-time upload URL
  *   GET    /client/v4/accounts/:accountId/stream                  list
@@ -48,11 +38,11 @@ import {
  */
 
 // Error codes as on the Cloudflare API: 10000 is "Authentication error".
-const AUTH_ERROR = 10000;
-const NOT_FOUND = 10003;
-const BAD_REQUEST = 10005;
+export const AUTH_ERROR = 10000;
+export const NOT_FOUND = 10003;
+export const BAD_REQUEST = 10005;
 
-class ApiError extends Error {
+export class ApiError extends Error {
   constructor(
     public status: number,
     public code: number,
@@ -80,41 +70,58 @@ const directUploadBody = videoSettings.extend({
 });
 const updateBody = videoSettings.extend({ uploadExpiry: isoDate.nullable().optional() });
 
-/** Accepts `Authorization: Bearer <token>` for the organization in the URL. */
+/**
+ * Checks `Authorization: Bearer <token>` against the organization (account id)
+ * in the URL and returns the organization id.
+ */
+export async function authenticateToken(
+  db: Db,
+  redis: Redis,
+  authorization: string | undefined,
+  accountId: string,
+  ip: string | undefined,
+): Promise<string> {
+  const token = /^Bearer\s+(\S+)$/i.exec(authorization ?? '')?.[1];
+  const fail401 = () => new ApiError(401, AUTH_ERROR, 'Authentication error');
+  if (!token || !z.uuid().safeParse(accountId).success) {
+    await limitFailures(redis, ip);
+    throw fail401();
+  }
+  const [row] = await db
+    .select({ token: apiTokens, orgBannedAt: organizations.bannedAt })
+    .from(apiTokens)
+    .innerJoin(organizations, eq(organizations.id, apiTokens.orgId))
+    .where(and(eq(apiTokens.tokenHash, hashToken(token)), isNull(apiTokens.revokedAt)))
+    .limit(1);
+  if (!row || row.token.orgId !== accountId) {
+    await limitFailures(redis, ip);
+    throw fail401();
+  }
+  if (row.orgBannedAt) throw new ApiError(403, AUTH_ERROR, 'This organization has been suspended.');
+  // Recorded at most once a minute per token.
+  void db
+    .update(apiTokens)
+    .set({ lastUsedAt: new Date() })
+    .where(
+      and(
+        eq(apiTokens.id, row.token.id),
+        sql`(${apiTokens.lastUsedAt} is null or ${apiTokens.lastUsedAt} < now() - interval '1 minute')`,
+      ),
+    )
+    .catch(() => {});
+  return row.token.orgId;
+}
+
 function authenticate(db: Db, redis: Redis) {
   return async (req: Authed, _res: Response, next: NextFunction) => {
     try {
-      const token = /^Bearer\s+(\S+)$/i.exec(req.headers.authorization ?? '')?.[1];
-      const accountId = String(req.params.accountId);
-      const fail401 = () => new ApiError(401, AUTH_ERROR, 'Authentication error');
-      if (!token || !z.uuid().safeParse(accountId).success) {
-        await limitFailures(redis, req.ip);
-        throw fail401();
-      }
-      const [row] = await db
-        .select({ token: apiTokens, orgBannedAt: organizations.bannedAt })
-        .from(apiTokens)
-        .innerJoin(organizations, eq(organizations.id, apiTokens.orgId))
-        .where(and(eq(apiTokens.tokenHash, hashToken(token)), isNull(apiTokens.revokedAt)))
-        .limit(1);
-      if (!row || row.token.orgId !== accountId) {
-        await limitFailures(redis, req.ip);
-        throw fail401();
-      }
-      if (row.orgBannedAt)
-        throw new ApiError(403, AUTH_ERROR, 'This organization has been suspended.');
-      req.orgId = row.token.orgId;
-      // Recorded at most once a minute per token.
-      void db
-        .update(apiTokens)
-        .set({ lastUsedAt: new Date() })
-        .where(
-          and(
-            eq(apiTokens.id, row.token.id),
-            sql`(${apiTokens.lastUsedAt} is null or ${apiTokens.lastUsedAt} < now() - interval '1 minute')`,
-          ),
-        )
-        .catch(() => {});
+      req.orgId = await authenticateToken(
+        db,
+        redis,
+        req.headers.authorization,
+        String(req.params.accountId),
+        req.ip,
+      );
       next();
     } catch (err) {
       next(err);
@@ -202,7 +209,8 @@ export function createStreamApi(db: Db, redis: Redis) {
   router.post('/', async (req: Authed, res, next) => {
     try {
       if (req.headers['tus-resumable']) {
-        setTusHeaders(res);
+        res.setHeader('Tus-Resumable', '1.0.0');
+        res.setHeader('Cache-Control', 'no-store');
         if (req.headers['tus-resumable'] !== '1.0.0') {
           res.setHeader('Tus-Version', '1.0.0');
           throw new UploadError(412, 'Only tus 1.0.0 is supported.');
@@ -230,26 +238,12 @@ export function createStreamApi(db: Db, redis: Redis) {
         res.status(201).end();
         return;
       }
-
-      // Basic upload: multipart/form-data with a "file" field, up to 200 MB.
-      const video = await createPendingVideo(db, { orgId: req.orgId! });
-      try {
-        const signal = clientGone(req);
-        const { file, filename } = await receiveFormFile(req, BASIC_UPLOAD_MAX);
-        if (filename) {
-          await db
-            .update(videos)
-            .set({ meta: { name: filename } })
-            .where(eq(videos.uid, video.uid));
-          video.meta = { name: filename };
-        }
-        const uploaded = await uploadWholeFile(db, video, file, signal);
-        res.json(ok(toStreamVideo(uploaded)));
-      } catch (err) {
-        req.resume();
-        await deleteVideo(db, video).catch(() => {});
-        throw err;
-      }
+      // Basic uploads carry the video in the body; the upload Worker handles them.
+      throw new ApiError(
+        400,
+        BAD_REQUEST,
+        'Send uploads to the Stream API host (STREAM_PUBLIC_URL), not to this server.',
+      );
     } catch (err) {
       next(err);
     }

@@ -41,11 +41,22 @@ const EnvSchema = z.object({
   /** Express "trust proxy" setting, e.g. 1 behind one reverse proxy, so rate limits see real IPs. */
   TRUST_PROXY: z.string().optional(),
 
-  /** Public URL of this API: Stream-compatible upload URLs and tus Locations point here. */
+  /** Public URL of this API. */
   API_PUBLIC_URL: z
     .url()
     .default('http://localhost:3000')
     .transform((v) => v.replace(/\/+$/, '')),
+  /**
+   * Public URL of the upload Worker (apps/upload-worker): the Stream-compatible API
+   * (/client/v4) and upload URLs (/upload) are served there, so video bytes go
+   * straight from the client to R2 and never through this server.
+   */
+  STREAM_PUBLIC_URL: z
+    .url()
+    .default('http://localhost:8787')
+    .transform((v) => v.replace(/\/+$/, '')),
+  /** Shared secret the upload Worker sends on /internal/uploads calls. */
+  UPLOAD_WORKER_SECRET: z.string().min(32, 'UPLOAD_WORKER_SECRET must be at least 32 characters'),
 
   /* ---- Video storage: Cloudflare R2 (any S3-compatible store works for local dev) ---- */
   /** e.g. https://<account id>.r2.cloudflarestorage.com, or http://localhost:8333 for local dev */

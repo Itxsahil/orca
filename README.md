@@ -4,8 +4,9 @@ Monorepo starter: **Vite + React** · **Express + oRPC** · **Drizzle + Postgres
 
 ```
 apps/
-  web/        Vite + React + TanStack Query, typed oRPC client
-  api/        Express 5 + oRPC server (served under /rpc)
+  web/            Vite + React + TanStack Query, typed oRPC client
+  api/            Express 5 + oRPC server (served under /rpc)
+  upload-worker/  Cloudflare Worker: Stream-compatible API host, moves video bytes into R2
 packages/
   contract/   oRPC contract (zod), shared by web and api
   db/         Drizzle schema, client and migrations
@@ -15,11 +16,12 @@ packages/
 
 ```bash
 cp .env.example .env
+cp apps/upload-worker/.dev.vars.example apps/upload-worker/.dev.vars
 docker compose up -d        # Postgres :5432, Redis :6379, S3 (SeaweedFS, stands in for R2) :8333
 npm install
 npm run db:migrate
 npm run storage:setup       # creates the two buckets (idempotent)
-npm run dev                 # api on :3000, web on :5173 (proxies /rpc to the api)
+npm run dev                 # api :3000, web :5173 (proxies /rpc), upload Worker :8787
 ```
 
 Open http://localhost:5173: it calls the `health` procedure and shows whether the API and database are up.
@@ -108,11 +110,11 @@ organizations: `R2_SOURCE_BUCKET` (originals, `<orgId>/<uid>/original`) and `R2_
 The API speaks Cloudflare Stream's upload API, so Stream code switches over by changing three
 values (shown on the dashboard's **API keys** page):
 
-| Cloudflare Stream                      | Here                          |
-| -------------------------------------- | ----------------------------- |
-| `https://api.cloudflare.com/client/v4` | `${API_PUBLIC_URL}/client/v4` |
-| Cloudflare account ID                  | the organization ID           |
-| Cloudflare API token                   | an API key from the dashboard |
+| Cloudflare Stream                      | Here                             |
+| -------------------------------------- | -------------------------------- |
+| `https://api.cloudflare.com/client/v4` | `${STREAM_PUBLIC_URL}/client/v4` |
+| Cloudflare account ID                  | the organization ID              |
+| Cloudflare API token                   | an API key from the dashboard    |
 
 Supported, with Stream's request and response shapes:
 
@@ -125,13 +127,37 @@ Supported, with Stream's request and response shapes:
 - `GET /accounts/:id/stream` (`creator`, `status`, `search`, `start`, `end`, `asc`, `limit`,
   `include_counts`), `GET|POST|DELETE /accounts/:id/stream/:uid`.
 
-How uploads work (`apps/api/src/video/`): the upload host is `/upload` on the API. Each tus
-chunk is streamed straight into one R2 multipart part (nothing touches local disk), with Stream's
-chunk rules: at least 5 MiB, at most 200 MiB, a multiple of 256 KiB, all the same size except the
-last. An interrupted chunk leaves the offset unchanged and the client resends it. When the last
-part arrives the object is completed, its size is checked, and the video moves to `queued`.
-Abandoned uploads are removed hourly (expired before starting, or idle for 7 days), and the source
-bucket aborts stale multipart uploads after 2 days.
+How uploads work: video bytes never pass through the API server.
+
+```
+client ──tus PATCH / form POST──▶ upload Worker ──PUT (presigned part URL)──▶ R2
+                                       │
+                                       └─ small JSON calls ─▶ API /internal/uploads
+                                          (may I? → presigned URL; stored → record it)
+```
+
+- The Worker (`apps/upload-worker`) serves `STREAM_PUBLIC_URL`: `/client/v4/*` (requests
+  without video bytes are passed on to the API) and `/upload/*` (tus and one-time URLs).
+- For each tus chunk the API checks Stream's chunk rules (at least 5 MiB, at most 200 MiB, a
+  multiple of 256 KiB, all equal except the last) and returns a presigned URL for exactly one R2
+  multipart part. The Worker streams the chunk there and reports the part's ETag; the API records
+  it only if the offset still matches, so an interrupted or duplicated chunk changes nothing.
+  The last chunk completes the object; its size is checked and the video moves to `queued`.
+- Basic uploads: the Worker reads the form data as a stream and stores it in 8 MiB parts.
+- The Worker holds no R2 keys; it authenticates to the API with `UPLOAD_WORKER_SECRET`.
+- Abandoned uploads are removed hourly (expired before starting, or idle for 7 days), and the
+  source bucket aborts stale multipart uploads after 2 days.
+
+Deploying the Worker: set `API_ORIGIN` in `apps/upload-worker/wrangler.toml` to a hostname that
+reaches the API server directly (not routed through the Worker), add a route or custom domain,
+`npx wrangler secret put UPLOAD_WORKER_SECRET` (same value as the API's), then
+`npm run worker:deploy`. Use the Workers Paid plan: uploads need more CPU time than the free
+plan's 10 ms per request.
+
+Limits on Cloudflare: a request to a Worker can carry at most 100 MB on the Free and Pro plans
+of the Worker's domain (200 MB on Business, more on Enterprise). tus chunks of 50 MiB (Stream's
+recommendation, used by the dashboard) are fine; chunks or form uploads above 100 MB need a
+bigger plan.
 
 Not yet: encoding (phase 2), playback and signed URLs (phase 3), upload from URL, watermarks,
 webhooks. Videos stay `queued` until the encoder exists.

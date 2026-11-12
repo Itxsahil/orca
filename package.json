@@ -10,7 +10,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev": "concurrently -k -n api,web -c blue,green \"npm run dev -w @repo/api\" \"npm run dev -w @repo/web\"",
+    "dev": "concurrently -k -n api,web,worker -c blue,green,magenta \"npm run dev -w @repo/api\" \"npm run dev -w @repo/web\" \"npm run dev -w @repo/upload-worker\"",
     "build": "npm run build -w @repo/api && npm run build -w @repo/web",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "db:generate": "npm run generate -w @repo/db --",
@@ -18,7 +18,8 @@
     "db:studio": "npm run studio -w @repo/db",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "storage:setup": "npm run storage:setup -w @repo/api"
+    "storage:setup": "npm run storage:setup -w @repo/api",
+    "worker:deploy": "npm run deploy -w @repo/upload-worker"
   },
   "devDependencies": {
     "concurrently": "^10.0.7",

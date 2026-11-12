@@ -32,7 +32,7 @@ import { hashToken, newToken } from './auth/tokens';
 import { renderInviteEmail } from './email/invite-email';
 import { sendEmail } from './email/send';
 import { createPendingVideo, deleteVideo, UploadError } from './video/upload-core';
-import { tusUploadUrl } from './video/upload-router';
+import { tusUploadUrl } from './video/urls';
 
 const os = implement(contract).$context<Context>();
 
@@ -404,7 +404,7 @@ export const router = os.router({
         .from(apiTokens)
         .where(and(eq(apiTokens.orgId, input.orgId), isNull(apiTokens.revokedAt)))
         .orderBy(desc(apiTokens.createdAt));
-      return { apiBase: `${env.API_PUBLIC_URL}/client/v4`, accountId: input.orgId, tokens };
+      return { apiBase: `${env.STREAM_PUBLIC_URL}/client/v4`, accountId: input.orgId, tokens };
     }),
 
     create: os.apiTokens.create.use(authed).handler(async ({ input, context }) => {

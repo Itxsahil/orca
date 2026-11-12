@@ -12,7 +12,7 @@ import { env } from './env';
 import { router } from './router';
 import { createRedis } from './redis';
 import { createStreamApi } from './video/stream-api';
-import { createUploadRouter } from './video/upload-router';
+import { createInternalRouter } from './video/internal-router';
 import { sweepAbandonedUploads } from './video/upload-core';
 
 const db = createDb(env.DATABASE_URL);
@@ -41,10 +41,11 @@ if (env.TRUST_PROXY) {
   app.set('trust proxy', /^\d+$/.test(env.TRUST_PROXY) ? Number(env.TRUST_PROXY) : env.TRUST_PROXY);
 }
 
-// Video uploads and the Stream-compatible API come before the app's CORS policy:
-// upload URLs are one-time capabilities any origin may use, and the API takes
-// bearer tokens and is meant for servers, not browsers.
-app.use('/upload', createUploadRouter(db, redis));
+// The upload Worker (apps/upload-worker) is the public face of these: it moves
+// video bytes into R2 itself and calls /internal/uploads for permission and state,
+// and passes other Stream API requests on to /client/v4. Both come before the
+// app's CORS policy: they are for servers and the Worker, not browsers.
+app.use('/internal/uploads', createInternalRouter(db, redis));
 app.use('/client/v4/accounts/:accountId/stream', createStreamApi(db, redis));
 
 app.use(cors({ origin: env.CORS_ORIGIN, credentials: true }));
