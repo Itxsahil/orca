@@ -8,6 +8,13 @@
       "when": 1794408598978,
       "tag": "0000_auth",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1794459938097,
+      "tag": "0001_ban_and_redis_sessions",
+      "breakpoints": true
     }
   ]
 }

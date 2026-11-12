@@ -19,7 +19,7 @@ import {
  *               role ('owner' for now; add 'admin' / 'member' here later)
  *
  *   invitations: single-use links that create a user + membership
- *   sessions:    one row per logged-in browser (only a hash of the cookie token is stored)
+ *   sessions live in Redis (see apps/api/src/auth/session.ts), not in Postgres
  */
 
 /** Roles inside an organization. Extend this list when members/admins are added. */
@@ -34,6 +34,9 @@ export const users = pgTable(
     name: text().notNull(),
     passwordHash: text().notNull(),
     isPlatformAdmin: boolean().notNull().default(false),
+    /** Set when the platform admin bans this user: they are logged out and cannot log in. */
+    bannedAt: timestamp({ withTimezone: true }),
+    banReason: text(),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -47,6 +50,9 @@ export const users = pgTable(
 export const organizations = pgTable('organizations', {
   id: uuid().primaryKey().defaultRandom(),
   name: text().notNull(),
+  /** Set when the platform admin bans the organization: its members are logged out and blocked. */
+  bannedAt: timestamp({ withTimezone: true }),
+  banReason: text(),
   createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -86,23 +92,8 @@ export const invitations = pgTable(
   (t) => [index().on(t.orgId)],
 );
 
-export const sessions = pgTable(
-  'sessions',
-  {
-    /** SHA-256 of the session cookie value. The cookie value itself is never stored. */
-    tokenHash: text().primaryKey(),
-    userId: uuid()
-      .notNull()
-      .references(() => users.id, { onDelete: 'cascade' }),
-    expiresAt: timestamp({ withTimezone: true }).notNull(),
-    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
-  },
-  (t) => [index().on(t.userId)],
-);
-
 export type User = typeof users.$inferSelect;
 export type Organization = typeof organizations.$inferSelect;
 export type Membership = typeof memberships.$inferSelect;
 export type Invitation = typeof invitations.$inferSelect;
-export type Session = typeof sessions.$inferSelect;
 export type OrgRole = (typeof orgRole.enumValues)[number];

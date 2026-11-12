@@ -31,14 +31,41 @@ export const InviteSchema = z.object({
   createdAt: z.date(),
 });
 
+const BanReason = z.string().trim().max(500).optional();
+
 export const OrgSummarySchema = z.object({
   id: z.uuid(),
   name: z.string(),
   createdAt: z.date(),
-  owners: z.array(z.object({ id: z.uuid(), name: z.string(), email: z.string() })),
+  bannedAt: z.date().nullable(),
+  banReason: z.string().nullable(),
+  owners: z.array(
+    z.object({ id: z.uuid(), name: z.string(), email: z.string(), bannedAt: z.date().nullable() }),
+  ),
   invites: z.array(InviteSchema),
 });
 export type OrgSummary = z.infer<typeof OrgSummarySchema>;
+
+/** A client: any user who is not the platform admin. */
+export const ClientSchema = z.object({
+  id: z.uuid(),
+  name: z.string(),
+  email: z.string(),
+  createdAt: z.date(),
+  bannedAt: z.date().nullable(),
+  banReason: z.string().nullable(),
+  orgs: z.array(
+    z.object({
+      id: z.uuid(),
+      name: z.string(),
+      role: OrgRoleSchema,
+      bannedAt: z.date().nullable(),
+    }),
+  ),
+});
+export type Client = z.infer<typeof ClientSchema>;
+
+const Ok = z.object({ ok: z.literal(true) });
 
 /** Returned whenever an invite is created. The link is shown once: only its hash is stored. */
 export const CreatedInviteSchema = z.object({
@@ -52,7 +79,9 @@ export const CreatedInviteSchema = z.object({
 });
 
 export const contract = {
-  health: oc.output(z.object({ ok: z.literal(true), db: z.boolean(), time: z.date() })),
+  health: oc.output(
+    z.object({ ok: z.literal(true), db: z.boolean(), redis: z.boolean(), time: z.date() }),
+  ),
 
   auth: {
     /** Public. Tells the web app whether the first-run setup page should be shown. */
@@ -85,11 +114,21 @@ export const contract = {
       create: oc
         .input(z.object({ name: Name, ownerEmail: Email }))
         .output(CreatedInviteSchema.extend({ orgId: z.uuid() })),
+      /** Suspends the organization: its members are logged out and blocked. */
+      ban: oc.input(z.object({ orgId: z.uuid(), reason: BanReason })).output(Ok),
+      unban: oc.input(z.object({ orgId: z.uuid() })).output(Ok),
+    },
+    users: {
+      /** Every client (everyone except the platform admin). */
+      list: oc.output(z.array(ClientSchema)),
+      /** Suspends the user: logged out everywhere, cannot log in. */
+      ban: oc.input(z.object({ userId: z.uuid(), reason: BanReason })).output(Ok),
+      unban: oc.input(z.object({ userId: z.uuid() })).output(Ok),
     },
     invites: {
       /** New owner invite for an existing organization (e.g. the previous one expired). */
       create: oc.input(z.object({ orgId: z.uuid(), email: Email })).output(CreatedInviteSchema),
-      revoke: oc.input(z.object({ inviteId: z.uuid() })).output(z.object({ ok: z.literal(true) })),
+      revoke: oc.input(z.object({ inviteId: z.uuid() })).output(Ok),
     },
   },
 };

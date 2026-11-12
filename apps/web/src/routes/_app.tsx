@@ -2,6 +2,8 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { createFileRoute, Outlet, redirect, useNavigate } from '@tanstack/react-router';
 import { Button } from '@/components/ui/button';
 import { ModeToggle } from '@/components/mode-toggle';
+import { AdminSidebar } from '@/components/admin-sidebar';
+import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { getAuth } from '@/lib/auth';
 import { orpc } from '@/orpc';
 
@@ -28,6 +30,22 @@ function AppLayout() {
       },
     }),
   );
+
+  // The platform admin gets the sidebar layout; organization owners keep the top bar.
+  if (me.isPlatformAdmin) {
+    return (
+      <SidebarProvider>
+        <AdminSidebar me={me} onLogout={() => logout.mutate({})} />
+        <SidebarInset>
+          <header className="flex h-14 items-center gap-2 border-b px-4">
+            <SidebarTrigger className="-ml-1" />
+            <span className="text-sm text-muted-foreground">Platform admin</span>
+          </header>
+          <Outlet />
+        </SidebarInset>
+      </SidebarProvider>
+    );
+  }
 
   return (
     <>

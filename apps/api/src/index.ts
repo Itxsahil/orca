@@ -10,9 +10,10 @@ import {
 import { createDb } from '@repo/db';
 import { env } from './env';
 import { router } from './router';
-import { purgeExpiredSessions } from './auth/session';
+import { createRedis } from './redis';
 
 const db = createDb(env.DATABASE_URL);
+const redis = createRedis(env.REDIS_URL);
 
 const rpcHandler = new RPCHandler(router, {
   plugins: [
@@ -42,7 +43,7 @@ app.use(cors({ origin: env.CORS_ORIGIN, credentials: true }));
 app.use('/rpc{/*path}', async (req, res, next) => {
   const { matched } = await rpcHandler.handle(req, res, {
     prefix: '/rpc',
-    context: { db, ip: req.ip ?? 'unknown' },
+    context: { db, redis, ip: req.ip ?? 'unknown' },
   });
   if (!matched) next();
 });
@@ -59,13 +60,10 @@ const server = app.listen(env.API_PORT, () => {
   }
 });
 
-const purge = setInterval(() => void purgeExpiredSessions(db).catch(() => {}), 60 * 60 * 1000);
-purge.unref();
-
 async function shutdown(signal: string) {
   console.log(`[api] ${signal} received, shutting down`);
-  clearInterval(purge);
   server.close();
+  await redis.quit().catch(() => {});
   await db.$client.end().catch(() => {});
   process.exit(0);
 }

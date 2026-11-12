@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { BanControl } from '@/components/ban-control';
 
 type InviteStatus = OrgSummary['invites'][number]['status'];
 
@@ -62,13 +63,20 @@ export function AdminPage() {
   const revoke = useMutation(
     orpc.admin.invites.revoke.mutationOptions({ onSuccess: () => void refresh() }),
   );
+  const banOrg = useMutation(
+    orpc.admin.orgs.ban.mutationOptions({ onSuccess: () => void refresh() }),
+  );
+  const unbanOrg = useMutation(
+    orpc.admin.orgs.unban.mutationOptions({ onSuccess: () => void refresh() }),
+  );
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
     create.mutate(form);
   };
 
-  const error = create.error ?? reinvite.error ?? revoke.error ?? orgs.error;
+  const error =
+    create.error ?? reinvite.error ?? revoke.error ?? banOrg.error ?? unbanOrg.error ?? orgs.error;
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-10">
@@ -129,6 +137,9 @@ export function AdminPage() {
             org={org}
             onReinvite={(email) => reinvite.mutate({ orgId: org.id, email })}
             onRevoke={(inviteId) => revoke.mutate({ inviteId })}
+            banPending={banOrg.isPending || unbanOrg.isPending}
+            onBan={(reason) => banOrg.mutate({ orgId: org.id, reason: reason || undefined })}
+            onUnban={() => unbanOrg.mutate({ orgId: org.id })}
           />
         ))}
       </div>
@@ -140,31 +151,55 @@ function OrgCard({
   org,
   onReinvite,
   onRevoke,
+  banPending,
+  onBan,
+  onUnban,
 }: {
   org: OrgSummary;
   onReinvite: (email: string) => void;
   onRevoke: (inviteId: string) => void;
+  banPending: boolean;
+  onBan: (reason: string) => void;
+  onUnban: () => void;
 }) {
   const latest = org.invites[0];
   const badge = latest ? STATUS_BADGE[latest.status] : null;
+  const banned = !!org.bannedAt;
 
   return (
     <Card>
-      <CardHeader className="flex flex-row items-start justify-between gap-3">
+      <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3">
         <div className="grid gap-0.5">
-          <CardTitle>{org.name}</CardTitle>
-          <CardDescription>Created {org.createdAt.toLocaleDateString()}</CardDescription>
+          <CardTitle className="flex items-center gap-2">
+            {org.name}
+            {banned && <Badge variant="destructive">Banned</Badge>}
+          </CardTitle>
+          <CardDescription>
+            Created {org.createdAt.toLocaleDateString()}
+            {banned && ` · banned ${org.bannedAt!.toLocaleDateString()}`}
+            {banned && org.banReason ? ` · ${org.banReason}` : ''}
+          </CardDescription>
         </div>
-        {latest && badge && (
-          <Badge variant={badge.variant} className={`capitalize ${badge.className}`}>
-            {latest.status}
-          </Badge>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {!banned && latest && badge && (
+            <Badge variant={badge.variant} className={`capitalize ${badge.className}`}>
+              {latest.status}
+            </Badge>
+          )}
+          <BanControl banned={banned} pending={banPending} onBan={onBan} onUnban={onUnban} />
+        </div>
       </CardHeader>
       <CardContent>
         {org.owners.length > 0 ? (
           <p className="text-sm">
-            Owner: {org.owners.map((o) => `${o.name} <${o.email}>`).join(', ')}
+            Owner:{' '}
+            {org.owners
+              .map((o) => `${o.name} <${o.email}>${o.bannedAt ? ' (banned)' : ''}`)
+              .join(', ')}
+          </p>
+        ) : banned ? (
+          <p className="text-sm text-muted-foreground">
+            Unban the organization to invite its owner.
           </p>
         ) : latest ? (
           <div className="flex flex-wrap items-center justify-between gap-3">

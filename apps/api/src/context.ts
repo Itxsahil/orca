@@ -3,6 +3,7 @@ import type {
   ResponseHeadersPluginContext,
 } from '@orpc/server/plugins';
 import type { Db } from '@repo/db';
+import type { Redis } from './redis';
 
 /**
  * Everything a procedure handler can use. `reqHeaders` / `resHeaders` are filled
@@ -10,6 +11,7 @@ import type { Db } from '@repo/db';
  */
 export interface Context extends RequestHeadersPluginContext, ResponseHeadersPluginContext {
   db: Db;
+  redis: Redis;
   /** Client IP (honours TRUST_PROXY), used for rate limiting. */
   ip: string;
 }

@@ -15,7 +15,7 @@ packages/
 
 ```bash
 cp .env.example .env
-docker compose up -d        # Postgres on localhost:5432
+docker compose up -d        # Postgres on :5432, Redis on :6379
 npm install
 npm run dev                 # api on :3000, web on :5173 (proxies /rpc to the api)
 ```
@@ -38,6 +38,11 @@ Invite-only, email + password, written with Node's built-in `crypto` (no auth li
 3. The owner opens `/invite/<token>`, picks a name and password, and is logged in as owner.
 4. Everyone logs in at `/login`.
 
+**Banning (platform admin):** in `/admin` the sidebar has **Organizations** and **Clients**.
+Banning a client logs them out everywhere and blocks login ("This account has been suspended").
+Banning an organization does the same for its members, and stops its pending invites and new links.
+Every request re-checks bans, and unbanning restores access. The platform admin cannot be banned.
+
 **Invite emails:** when `RESEND_API_KEY` is set, creating an organization (or a new link) also
 emails the invite, sent from `EMAIL_FROM` through Resend's HTTP API (`apps/api/src/email/`). The
 template follows the web theme, light or dark per the reader's mail app. Without a key, or if
@@ -52,12 +57,13 @@ domain to email clients.
 
 - Passwords: scrypt (N=2^15, r=8, p=1) with a random salt, compared in constant time.
 - Sessions: random 256-bit token in an `HttpOnly`, `SameSite=Lax` cookie (`__Host-` prefixed and
-  `Secure` in production). Only its SHA-256 is stored, in `sessions`.
+  `Secure` in production). Only its SHA-256 is stored, in **Redis** (`session:<hash>` with a sliding
+  expiry, plus `user-sessions:<user id>` so a user can be logged out everywhere at once).
 - Invite links: random 256-bit token, only its hash stored, single-use, expire, revocable; issuing
   a new link for the same email revokes the previous one.
 - CSRF: the API requires the `x-csrf-token` header that the web client sends.
-- Login: same error and similar timing for unknown email vs wrong password; in-memory rate limits
-  (move them to Postgres/Redis when running several API instances).
+- Login: same error and similar timing for unknown email vs wrong password; rate limits are kept in
+  Redis, so they hold across several API instances.
 - Races: one platform admin is enforced by a unique index; accepting an invite locks its row.
 
 In procedures, use the `authed` and `platformAdmin` middleware from `apps/api/src/router.ts`.

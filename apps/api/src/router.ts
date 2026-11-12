@@ -19,7 +19,13 @@ import { env } from './env';
 import type { Context } from './context';
 import { getDummyHash, hashPassword, verifyPassword } from './auth/password';
 import { rateLimit } from './auth/rate-limit';
-import { endSession, getSessionUser, startSession } from './auth/session';
+import {
+  blockedReason,
+  endSession,
+  getSessionUser,
+  revokeUserSessions,
+  startSession,
+} from './auth/session';
 import { hashToken, newToken } from './auth/tokens';
 import { renderInviteEmail } from './email/invite-email';
 import { sendEmail } from './email/send';
@@ -79,6 +85,8 @@ const INVITE_PROBLEMS = {
   revoked: 'This invite link was revoked. Ask for a new one.',
   expired: 'This invite link has expired. Ask for a new one.',
 } as const;
+
+const ORG_SUSPENDED = 'This organization has been suspended.';
 
 function assertSignupsOpen() {
   if (env.SIGNUP_MODE === 'closed') {
@@ -147,7 +155,11 @@ export const router = os.router({
     } catch {
       db = false;
     }
-    return { ok: true as const, db, time: new Date() };
+    const redis = await context.redis
+      .ping()
+      .then((r) => r === 'PONG')
+      .catch(() => false);
+    return { ok: true as const, db, redis, time: new Date() };
   }),
 
   auth: {
@@ -156,7 +168,7 @@ export const router = os.router({
     })),
 
     setup: os.auth.setup.handler(async ({ input, context }) => {
-      rateLimit(`setup:${context.ip}`, 5, MINUTE);
+      await rateLimit(context.redis, `setup:${context.ip}`, 5, MINUTE);
       assertSignupsOpen();
       if (!env.PLATFORM_ADMIN_EMAIL) {
         throw new ORPCError('FORBIDDEN', { message: 'PLATFORM_ADMIN_EMAIL is not configured.' });
@@ -195,8 +207,8 @@ export const router = os.router({
     }),
 
     login: os.auth.login.handler(async ({ input, context }) => {
-      rateLimit(`login:${context.ip}:${input.email}`, 5, MINUTE);
-      rateLimit(`login-ip:${context.ip}`, 30, MINUTE);
+      await rateLimit(context.redis, `login:${context.ip}:${input.email}`, 5, MINUTE);
+      await rateLimit(context.redis, `login-ip:${context.ip}`, 30, MINUTE);
 
       const [user] = await context.db
         .select()
@@ -208,6 +220,9 @@ export const router = os.router({
       if (!user || !ok) {
         throw new ORPCError('UNAUTHORIZED', { message: 'Invalid email or password.' });
       }
+      // Checked after the password, so it tells nothing to someone guessing.
+      const blocked = await blockedReason(context.db, user);
+      if (blocked) throw new ORPCError('FORBIDDEN', { message: blocked });
       await startSession(context, user.id);
       return loadMe(context.db, user);
     }),
@@ -225,9 +240,13 @@ export const router = os.router({
 
   invites: {
     preview: os.invites.preview.handler(async ({ input, context }) => {
-      rateLimit(`invite-preview:${context.ip}`, 30, MINUTE);
+      await rateLimit(context.redis, `invite-preview:${context.ip}`, 30, MINUTE);
       const [row] = await context.db
-        .select({ invite: invitations, orgName: organizations.name })
+        .select({
+          invite: invitations,
+          orgName: organizations.name,
+          orgBannedAt: organizations.bannedAt,
+        })
         .from(invitations)
         .innerJoin(organizations, eq(organizations.id, invitations.orgId))
         .where(eq(invitations.tokenHash, hashToken(input.token)))
@@ -236,11 +255,12 @@ export const router = os.router({
       const status = inviteStatus(row.invite);
       if (status !== 'pending')
         throw new ORPCError('NOT_FOUND', { message: INVITE_PROBLEMS[status] });
+      if (row.orgBannedAt) throw new ORPCError('FORBIDDEN', { message: ORG_SUSPENDED });
       return { orgName: row.orgName, email: row.invite.email, role: row.invite.role };
     }),
 
     accept: os.invites.accept.handler(async ({ input, context }) => {
-      rateLimit(`invite-accept:${context.ip}`, 10, MINUTE);
+      await rateLimit(context.redis, `invite-accept:${context.ip}`, 10, MINUTE);
       assertSignupsOpen();
       const passwordHash = await hashPassword(input.password);
 
@@ -257,6 +277,12 @@ export const router = os.router({
         const status = inviteStatus(invite);
         if (status !== 'pending')
           throw new ORPCError('NOT_FOUND', { message: INVITE_PROBLEMS[status] });
+        const [org] = await tx
+          .select({ bannedAt: organizations.bannedAt })
+          .from(organizations)
+          .where(eq(organizations.id, invite.orgId))
+          .limit(1);
+        if (org?.bannedAt) throw new ORPCError('FORBIDDEN', { message: ORG_SUSPENDED });
 
         const [existing] = await tx
           .select({ id: users.id })
@@ -300,7 +326,13 @@ export const router = os.router({
         const orgIds = orgs.map((o) => o.id);
 
         const owners = await context.db
-          .select({ orgId: memberships.orgId, id: users.id, name: users.name, email: users.email })
+          .select({
+            orgId: memberships.orgId,
+            id: users.id,
+            name: users.name,
+            email: users.email,
+            bannedAt: users.bannedAt,
+          })
           .from(memberships)
           .innerJoin(users, eq(users.id, memberships.userId))
           .where(and(inArray(memberships.orgId, orgIds), eq(memberships.role, 'owner')));
@@ -315,6 +347,8 @@ export const router = os.router({
           id: org.id,
           name: org.name,
           createdAt: org.createdAt,
+          bannedAt: org.bannedAt,
+          banReason: org.banReason,
           owners: owners.filter((o) => o.orgId === org.id).map(({ orgId: _, ...o }) => o),
           invites: invites
             .filter((i) => i.orgId === org.id)
@@ -345,16 +379,113 @@ export const router = os.router({
         });
         return { ...created, ...email };
       }),
+
+      ban: os.admin.orgs.ban.use(platformAdmin).handler(async ({ input, context }) => {
+        const [org] = await context.db
+          .update(organizations)
+          .set({ bannedAt: new Date(), banReason: input.reason || null })
+          .where(eq(organizations.id, input.orgId))
+          .returning({ id: organizations.id });
+        if (!org) throw new ORPCError('NOT_FOUND', { message: 'Organization not found.' });
+        // Log its members out now (every request also re-checks bans; this makes it immediate).
+        const members = await context.db
+          .select({ userId: memberships.userId })
+          .from(memberships)
+          .where(eq(memberships.orgId, org.id));
+        await Promise.all(members.map((m) => revokeUserSessions(context.redis, m.userId)));
+        return { ok: true as const };
+      }),
+
+      unban: os.admin.orgs.unban.use(platformAdmin).handler(async ({ input, context }) => {
+        const [org] = await context.db
+          .update(organizations)
+          .set({ bannedAt: null, banReason: null })
+          .where(eq(organizations.id, input.orgId))
+          .returning({ id: organizations.id });
+        if (!org) throw new ORPCError('NOT_FOUND', { message: 'Organization not found.' });
+        return { ok: true as const };
+      }),
+    },
+
+    users: {
+      list: os.admin.users.list.use(platformAdmin).handler(async ({ context }) => {
+        const clients = await context.db
+          .select()
+          .from(users)
+          .where(eq(users.isPlatformAdmin, false))
+          .orderBy(desc(users.createdAt));
+        if (clients.length === 0) return [];
+        const orgs = await context.db
+          .select({
+            userId: memberships.userId,
+            id: organizations.id,
+            name: organizations.name,
+            role: memberships.role,
+            bannedAt: organizations.bannedAt,
+          })
+          .from(memberships)
+          .innerJoin(organizations, eq(organizations.id, memberships.orgId))
+          .where(
+            inArray(
+              memberships.userId,
+              clients.map((c) => c.id),
+            ),
+          );
+        return clients.map((c) => ({
+          id: c.id,
+          name: c.name,
+          email: c.email,
+          createdAt: c.createdAt,
+          bannedAt: c.bannedAt,
+          banReason: c.banReason,
+          orgs: orgs.filter((o) => o.userId === c.id).map(({ userId: _, ...o }) => o),
+        }));
+      }),
+
+      ban: os.admin.users.ban.use(platformAdmin).handler(async ({ input, context }) => {
+        const [target] = await context.db
+          .select({ id: users.id, isPlatformAdmin: users.isPlatformAdmin })
+          .from(users)
+          .where(eq(users.id, input.userId))
+          .limit(1);
+        if (!target) throw new ORPCError('NOT_FOUND', { message: 'User not found.' });
+        if (target.isPlatformAdmin) {
+          throw new ORPCError('FORBIDDEN', { message: 'The platform admin cannot be banned.' });
+        }
+        await context.db
+          .update(users)
+          .set({ bannedAt: new Date(), banReason: input.reason || null })
+          .where(eq(users.id, target.id));
+        await revokeUserSessions(context.redis, target.id);
+        return { ok: true as const };
+      }),
+
+      unban: os.admin.users.unban.use(platformAdmin).handler(async ({ input, context }) => {
+        const [target] = await context.db
+          .update(users)
+          .set({ bannedAt: null, banReason: null })
+          .where(and(eq(users.id, input.userId), eq(users.isPlatformAdmin, false)))
+          .returning({ id: users.id });
+        if (!target) throw new ORPCError('NOT_FOUND', { message: 'User not found.' });
+        return { ok: true as const };
+      }),
     },
 
     invites: {
       create: os.admin.invites.create.use(platformAdmin).handler(async ({ input, context }) => {
         const [org] = await context.db
-          .select({ id: organizations.id, name: organizations.name })
+          .select({
+            id: organizations.id,
+            name: organizations.name,
+            bannedAt: organizations.bannedAt,
+          })
           .from(organizations)
           .where(eq(organizations.id, input.orgId))
           .limit(1);
         if (!org) throw new ORPCError('NOT_FOUND', { message: 'Organization not found.' });
+        if (org.bannedAt) {
+          throw new ORPCError('CONFLICT', { message: 'Unban the organization before inviting.' });
+        }
         const invite = await createInvite(context.db, org.id, input.email, context.user.id);
         const email = await emailInvite({
           to: input.email,

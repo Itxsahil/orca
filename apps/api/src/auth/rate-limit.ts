@@ -1,31 +1,28 @@
 import { ORPCError } from '@orpc/server';
+import type { Redis } from '../redis';
 
 /*
- * Fixed-window, in-memory rate limiter. Good for a single API process; move the
- * counters to Postgres or Redis when running several API instances.
+ * Fixed-window rate limiter in Redis, so limits hold across several API processes.
+ *   rl:<key> → attempts in the current window, expires when the window ends
  */
-
-const windows = new Map<string, { count: number; resetAt: number }>();
-
-export function rateLimit(key: string, max: number, windowMs: number): void {
-  const now = Date.now();
-  const entry = windows.get(key);
-  if (!entry || entry.resetAt <= now) {
-    windows.set(key, { count: 1, resetAt: now + windowMs });
-    return;
-  }
-  entry.count++;
-  if (entry.count > max) {
-    const retryAfter = Math.ceil((entry.resetAt - now) / 1000);
+export async function rateLimit(
+  redis: Redis,
+  key: string,
+  max: number,
+  windowMs: number,
+): Promise<void> {
+  const redisKey = `rl:${key}`;
+  const [[, count], [, ttl]] = (await redis.multi().incr(redisKey).pttl(redisKey).exec()) as [
+    [null, number],
+    [null, number],
+  ];
+  // First hit of a window (or a key that somehow lost its expiry): start the window.
+  if (count === 1 || ttl < 0) await redis.pexpire(redisKey, windowMs);
+  if (count > max) {
+    const retryAfter = Math.max(1, Math.ceil((ttl > 0 ? ttl : windowMs) / 1000));
     throw new ORPCError('TOO_MANY_REQUESTS', {
       message: `Too many attempts. Try again in ${retryAfter} seconds.`,
       data: { retryAfter },
     });
   }
 }
-
-// Drop finished windows so the map does not grow forever.
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, entry] of windows) if (entry.resetAt <= now) windows.delete(key);
-}, 60_000).unref();
