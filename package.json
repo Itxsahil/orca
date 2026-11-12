@@ -10,7 +10,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev": "concurrently -k -n api,web,worker -c blue,green,magenta \"npm run dev -w @repo/api\" \"npm run dev -w @repo/web\" \"npm run dev -w @repo/upload-worker\"",
+    "dev": "concurrently -k -n api,web,worker,encoder -c blue,green,magenta,yellow \"npm run dev -w @repo/api\" \"npm run dev -w @repo/web\" \"npm run dev -w @repo/upload-worker\" \"npm run dev -w @repo/encoder\"",
     "build": "npm run build -w @repo/api && npm run build -w @repo/web",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "db:generate": "npm run generate -w @repo/db --",

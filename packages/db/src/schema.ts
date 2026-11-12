@@ -156,6 +156,9 @@ export const videos = pgTable(
     width: integer(),
     height: integer(),
     readyToStreamAt: timestamp({ withTimezone: true }),
+    /** Encoding jobs: an encoder owns a video while its lease runs; a crashed one's lease expires. */
+    encodeLeaseUntil: timestamp({ withTimezone: true }),
+    encodeAttempts: integer().notNull().default(0),
 
     createdBy: uuid().references(() => users.id, { onDelete: 'set null' }),
     created: timestamp({ withTimezone: true }).notNull().defaultNow(),
@@ -164,7 +167,7 @@ export const videos = pgTable(
       .defaultNow()
       .$onUpdate(() => new Date()),
   },
-  (t) => [index().on(t.orgId, t.created)],
+  (t) => [index().on(t.orgId, t.created), index().on(t.state, t.uploaded)],
 );
 
 /** Org API tokens for the Stream-compatible API (Authorization: Bearer <token>). */

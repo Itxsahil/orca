@@ -4,16 +4,20 @@ import {
   CompleteMultipartUploadCommand,
   CreateMultipartUploadCommand,
   DeleteObjectCommand,
+  DeleteObjectsCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
   UploadPartCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import {
   and,
+  deliveryPrefix,
   eq,
   isNull,
   lt,
   organizations,
+  sourceKey,
   videos,
   type Db,
   type UploadedPart,
@@ -21,7 +25,7 @@ import {
 } from '@repo/db';
 import { env } from '../env';
 import type { Redis } from '../redis';
-import { buckets, r2, sourceKey } from '../storage/r2';
+import { buckets, r2 } from '../storage/r2';
 import { newVideoUid } from './ids';
 
 /*
@@ -442,8 +446,33 @@ export async function deleteVideo(db: Db, video: Video) {
       .send(new DeleteObjectCommand({ Bucket: buckets.source, Key: video.sourceKey }))
       .catch(() => {});
   }
-  // TODO (phase 2): also delete the encoded output in the delivery bucket.
+  await deleteEncodedOutput(video.orgId, video.uid);
   await db.delete(videos).where(eq(videos.uid, video.uid));
+}
+
+/** Deletes everything the encoder wrote for a video (HLS, thumbnails). */
+export async function deleteEncodedOutput(orgId: string, uid: string) {
+  const prefix = deliveryPrefix(orgId, uid);
+  let token: string | undefined;
+  do {
+    const page = await r2.send(
+      new ListObjectsV2Command({
+        Bucket: buckets.delivery,
+        Prefix: prefix,
+        ContinuationToken: token,
+      }),
+    );
+    const keys = (page.Contents ?? []).map((o) => ({ Key: o.Key! }));
+    if (keys.length) {
+      await r2.send(
+        new DeleteObjectsCommand({
+          Bucket: buckets.delivery,
+          Delete: { Objects: keys, Quiet: true },
+        }),
+      );
+    }
+    token = page.IsTruncated ? page.NextContinuationToken : undefined;
+  } while (token);
 }
 
 /** Deletes uploads that were never finished: expired before they started, or idle for 7 days. */

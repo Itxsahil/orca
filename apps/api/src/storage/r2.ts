@@ -24,6 +24,3 @@ export const buckets = {
   source: env.R2_SOURCE_BUCKET,
   delivery: env.R2_DELIVERY_BUCKET,
 };
-
-/** Where an original upload lives. User-supplied file names never end up in keys. */
-export const sourceKey = (orgId: string, uid: string) => `${orgId}/${uid}/original`;

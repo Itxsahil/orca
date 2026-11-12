@@ -7,6 +7,7 @@ apps/
   web/            Vite + React + TanStack Query, typed oRPC client
   api/            Express 5 + oRPC server (served under /rpc)
   upload-worker/  Cloudflare Worker: Stream-compatible API host, moves video bytes into R2
+  encoder/        ffmpeg encoder: turns uploads into HLS (runs on your own servers)
 packages/
   contract/   oRPC contract (zod), shared by web and api
   db/         Drizzle schema, client and migrations
@@ -21,7 +22,8 @@ docker compose up -d        # Postgres :5432, Redis :6379, S3 (SeaweedFS, stands
 npm install
 npm run db:migrate
 npm run storage:setup       # creates the two buckets (idempotent)
-npm run dev                 # api :3000, web :5173 (proxies /rpc), upload Worker :8787
+npm run dev                 # api :3000, web :5173 (proxies /rpc), upload Worker :8787, encoder
+                            # (the encoder needs ffmpeg installed locally)
 ```
 
 Open http://localhost:5173: it calls the `health` procedure and shows whether the API and database are up.
@@ -159,7 +161,43 @@ of the Worker's domain (200 MB on Business, more on Enterprise). tus chunks of 5
 recommendation, used by the dashboard) are fine; chunks or form uploads above 100 MB need a
 bigger plan.
 
-Not yet: encoding (phase 2), playback and signed URLs (phase 3), upload from URL, watermarks,
+## Encoding (apps/encoder)
+
+Uploaded videos are `queued`; an encoder turns them into HLS and marks them `ready`.
+
+```
+queued ─▶ encoder claims it ─▶ download original from R2 ─▶ ffprobe ─▶ ffmpeg ─▶ upload to delivery bucket ─▶ ready
+```
+
+- **Any input ffmpeg can read** (H.264, HEVC incl. 10-bit, VP9, AV1, ProRes, MPEG-2, GIF, …;
+  phone rotation is applied). Output: H.264 + AAC, HLS with fMP4 segments of 6 s, keyframes every
+  2 s, in `<orgId>/<uid>/hls/master.m3u8` (+ `v0/`, `v1/`, …) and
+  `<orgId>/<uid>/thumbnails/thumbnail.jpg` in the delivery bucket.
+- **Ladder** by the short side, never upscaled: 1080p, 720p, 480p, 360p, 240p (portrait videos
+  get the same rungs). Inputs smaller than 240p keep their size; above 60 fps is capped at 60.
+- **Stream's states and errors:** `inprogress` with `pctComplete`, then `ready` with `duration`
+  and `input` size, or `error` with `ERR_NON_VIDEO`, `ERR_MALFORMED_VIDEO`,
+  `ERR_DURATION_TOO_SHORT`, `ERR_DURATION_EXCEED_CONSTRAINT` (`maxDurationSeconds`) or
+  `ERR_UNKNOWN`.
+- **Queue = the `videos` table**, claimed with `FOR UPDATE SKIP LOCKED`: run as many encoders on
+  as many servers as you like, each video is encoded once. A 2-minute lease is renewed while
+  working; if an encoder crashes, another takes the video over when the lease runs out. Failures
+  are retried (30 s, then 60 s) up to `ENCODER_MAX_ATTEMPTS`. `SIGTERM` puts unfinished videos
+  back in the queue without counting the attempt. Deleting a video while it encodes stops the job
+  and removes its output.
+
+Running on a VPS (Docker):
+
+```bash
+docker build -f apps/encoder/Dockerfile -t video-encoder .
+docker run -d --name encoder --restart unless-stopped --env-file .env video-encoder
+```
+
+The encoder needs `DATABASE_URL` and the `R2_*` settings; it does not talk to the API. Give it
+disk for the largest original plus its encoded output. Stop it with `docker stop` (SIGTERM), not
+`kill -9` on the node process alone: that would leave ffmpeg running.
+
+Not yet: playback and signed URLs (phase 3), upload from URL, watermarks, webhooks, 4K output.
 webhooks. Videos stay `queued` until the encoder exists.
 
 ## Database
