@@ -15,8 +15,10 @@ packages/
 
 ```bash
 cp .env.example .env
-docker compose up -d        # Postgres on :5432, Redis on :6379
+docker compose up -d        # Postgres :5432, Redis :6379, S3 (SeaweedFS, stands in for R2) :8333
 npm install
+npm run db:migrate
+npm run storage:setup       # creates the two buckets (idempotent)
 npm run dev                 # api on :3000, web on :5173 (proxies /rpc to the api)
 ```
 
@@ -96,6 +98,43 @@ Guards live in each route's `beforeLoad` and read auth state from the TanStack Q
 3. Call it from React: `useQuery(orpc.yourProcedure.queryOptions({ input }))`.
 
 TypeScript flags any mismatch between the three.
+
+## Video uploads (Cloudflare Stream-compatible)
+
+Videos are stored in **private** Cloudflare R2 (no public bucket), in two buckets shared by all
+organizations: `R2_SOURCE_BUCKET` (originals, `<orgId>/<uid>/original`) and `R2_DELIVERY_BUCKET`
+(encoded output, from phase 2).
+
+The API speaks Cloudflare Stream's upload API, so Stream code switches over by changing three
+values (shown on the dashboard's **API keys** page):
+
+| Cloudflare Stream                      | Here                          |
+| -------------------------------------- | ----------------------------- |
+| `https://api.cloudflare.com/client/v4` | `${API_PUBLIC_URL}/client/v4` |
+| Cloudflare account ID                  | the organization ID           |
+| Cloudflare API token                   | an API key from the dashboard |
+
+Supported, with Stream's request and response shapes:
+
+- `POST /accounts/:id/stream`: basic upload (`multipart/form-data`, field `file`, up to 200 MB),
+  or tus upload creation when `Tus-Resumable` is sent (also `?direct_user=true`). Returns
+  `Location` and `stream-media-id`. `Upload-Metadata` keys: `name`, `requiresignedurls`,
+  `allowedorigins`, `thumbnailtimestamppct`, `scheduleddeletion`, `maxDurationSeconds`, `expiry`;
+  other keys go into `meta`. `Upload-Creator` sets `creator`.
+- `POST /accounts/:id/stream/direct_upload`: one-time basic upload URL (default expiry 30 min).
+- `GET /accounts/:id/stream` (`creator`, `status`, `search`, `start`, `end`, `asc`, `limit`,
+  `include_counts`), `GET|POST|DELETE /accounts/:id/stream/:uid`.
+
+How uploads work (`apps/api/src/video/`): the upload host is `/upload` on the API. Each tus
+chunk is streamed straight into one R2 multipart part (nothing touches local disk), with Stream's
+chunk rules: at least 5 MiB, at most 200 MiB, a multiple of 256 KiB, all the same size except the
+last. An interrupted chunk leaves the offset unchanged and the client resends it. When the last
+part arrives the object is completed, its size is checked, and the video moves to `queued`.
+Abandoned uploads are removed hourly (expired before starting, or idle for 7 days), and the source
+bucket aborts stale multipart uploads after 2 days.
+
+Not yet: encoding (phase 2), playback and signed URLs (phase 3), upload from URL, watermarks,
+webhooks. Videos stay `queued` until the encoder exists.
 
 ## Database
 

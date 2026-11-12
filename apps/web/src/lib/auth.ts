@@ -1,4 +1,5 @@
-import type { QueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useNavigate } from '@tanstack/react-router';
 import type { Me } from '@repo/contract';
 import { orpc } from '@/orpc';
 
@@ -16,5 +17,20 @@ export async function getAuth(queryClient: QueryClient) {
 
 /** Where a logged-in user lands. */
 export function homePath(me: Me) {
-  return me.isPlatformAdmin ? ('/admin' as const) : ('/home' as const);
+  if (me.isPlatformAdmin) return '/admin' as const;
+  return me.orgs.length > 0 ? ('/videos' as const) : ('/home' as const);
+}
+
+/** Logs out, clears cached data and goes to the login page. */
+export function useLogout() {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  return useMutation(
+    orpc.auth.logout.mutationOptions({
+      onSuccess: () => {
+        queryClient.clear();
+        void navigate({ to: '/login', replace: true });
+      },
+    }),
+  );
 }

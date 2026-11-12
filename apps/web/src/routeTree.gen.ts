@@ -12,10 +12,13 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as GuestRouteImport } from './routes/_guest'
+import { Route as AppOrgRouteImport } from './routes/_app/_org'
 import { Route as AppAdminRouteImport } from './routes/_app/admin'
 import { Route as AppHomeRouteImport } from './routes/_app/home'
 import { Route as GuestLoginRouteImport } from './routes/_guest/login'
 import { Route as GuestSetupRouteImport } from './routes/_guest/setup'
+import { Route as AppOrgApiKeysRouteImport } from './routes/_app/_org/api-keys'
+import { Route as AppOrgVideosRouteImport } from './routes/_app/_org/videos'
 import { Route as AppAdminIndexRouteImport } from './routes/_app/admin/index'
 import { Route as AppAdminClientsRouteImport } from './routes/_app/admin/clients'
 import { Route as AppAdminOrganizationsRouteImport } from './routes/_app/admin/organizations'
@@ -33,6 +36,10 @@ const AppRoute = AppRouteImport.update({
 const GuestRoute = GuestRouteImport.update({
   id: '/_guest',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AppOrgRoute = AppOrgRouteImport.update({
+  id: '/_org',
+  getParentRoute: () => AppRoute,
 } as any)
 const AppAdminRoute = AppAdminRouteImport.update({
   id: '/admin',
@@ -53,6 +60,16 @@ const GuestSetupRoute = GuestSetupRouteImport.update({
   id: '/setup',
   path: '/setup',
   getParentRoute: () => GuestRoute,
+} as any)
+const AppOrgApiKeysRoute = AppOrgApiKeysRouteImport.update({
+  id: '/api-keys',
+  path: '/api-keys',
+  getParentRoute: () => AppOrgRoute,
+} as any)
+const AppOrgVideosRoute = AppOrgVideosRouteImport.update({
+  id: '/videos',
+  path: '/videos',
+  getParentRoute: () => AppOrgRoute,
 } as any)
 const AppAdminIndexRoute = AppAdminIndexRouteImport.update({
   id: '/',
@@ -81,6 +98,8 @@ export interface FileRoutesByFullPath {
   '/home': typeof AppHomeRoute
   '/login': typeof GuestLoginRoute
   '/setup': typeof GuestSetupRoute
+  '/api-keys': typeof AppOrgApiKeysRoute
+  '/videos': typeof AppOrgVideosRoute
   '/admin/clients': typeof AppAdminClientsRoute
   '/admin/organizations': typeof AppAdminOrganizationsRoute
   '/invite/$token': typeof GuestInviteTokenRoute
@@ -91,6 +110,8 @@ export interface FileRoutesByTo {
   '/home': typeof AppHomeRoute
   '/login': typeof GuestLoginRoute
   '/setup': typeof GuestSetupRoute
+  '/api-keys': typeof AppOrgApiKeysRoute
+  '/videos': typeof AppOrgVideosRoute
   '/admin/clients': typeof AppAdminClientsRoute
   '/admin/organizations': typeof AppAdminOrganizationsRoute
   '/invite/$token': typeof GuestInviteTokenRoute
@@ -101,10 +122,13 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/_app': typeof AppRouteWithChildren
   '/_guest': typeof GuestRouteWithChildren
+  '/_app/_org': typeof AppOrgRouteWithChildren
   '/_app/admin': typeof AppAdminRouteWithChildren
   '/_app/home': typeof AppHomeRoute
   '/_guest/login': typeof GuestLoginRoute
   '/_guest/setup': typeof GuestSetupRoute
+  '/_app/_org/api-keys': typeof AppOrgApiKeysRoute
+  '/_app/_org/videos': typeof AppOrgVideosRoute
   '/_app/admin/clients': typeof AppAdminClientsRoute
   '/_app/admin/organizations': typeof AppAdminOrganizationsRoute
   '/_guest/invite/$token': typeof GuestInviteTokenRoute
@@ -118,6 +142,8 @@ export interface FileRouteTypes {
     | '/home'
     | '/login'
     | '/setup'
+    | '/api-keys'
+    | '/videos'
     | '/admin/clients'
     | '/admin/organizations'
     | '/invite/$token'
@@ -128,6 +154,8 @@ export interface FileRouteTypes {
     | '/home'
     | '/login'
     | '/setup'
+    | '/api-keys'
+    | '/videos'
     | '/admin/clients'
     | '/admin/organizations'
     | '/invite/$token'
@@ -137,10 +165,13 @@ export interface FileRouteTypes {
     | '/'
     | '/_app'
     | '/_guest'
+    | '/_app/_org'
     | '/_app/admin'
     | '/_app/home'
     | '/_guest/login'
     | '/_guest/setup'
+    | '/_app/_org/api-keys'
+    | '/_app/_org/videos'
     | '/_app/admin/clients'
     | '/_app/admin/organizations'
     | '/_guest/invite/$token'
@@ -176,6 +207,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof GuestRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_app/_org': {
+      id: '/_app/_org'
+      path: ''
+      fullPath: '/'
+      preLoaderRoute: typeof AppOrgRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/admin': {
       id: '/_app/admin'
       path: '/admin'
@@ -203,6 +241,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/setup'
       preLoaderRoute: typeof GuestSetupRouteImport
       parentRoute: typeof GuestRoute
+    }
+    '/_app/_org/api-keys': {
+      id: '/_app/_org/api-keys'
+      path: '/api-keys'
+      fullPath: '/api-keys'
+      preLoaderRoute: typeof AppOrgApiKeysRouteImport
+      parentRoute: typeof AppOrgRoute
+    }
+    '/_app/_org/videos': {
+      id: '/_app/_org/videos'
+      path: '/videos'
+      fullPath: '/videos'
+      preLoaderRoute: typeof AppOrgVideosRouteImport
+      parentRoute: typeof AppOrgRoute
     }
     '/_app/admin/': {
       id: '/_app/admin/'
@@ -235,6 +287,19 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface AppOrgRouteChildren {
+  AppOrgApiKeysRoute: typeof AppOrgApiKeysRoute
+  AppOrgVideosRoute: typeof AppOrgVideosRoute
+}
+
+const AppOrgRouteChildren: AppOrgRouteChildren = {
+  AppOrgApiKeysRoute: AppOrgApiKeysRoute,
+  AppOrgVideosRoute: AppOrgVideosRoute,
+}
+
+const AppOrgRouteWithChildren =
+  AppOrgRoute._addFileChildren(AppOrgRouteChildren)
+
 interface AppAdminRouteChildren {
   AppAdminClientsRoute: typeof AppAdminClientsRoute
   AppAdminOrganizationsRoute: typeof AppAdminOrganizationsRoute
@@ -252,11 +317,13 @@ const AppAdminRouteWithChildren = AppAdminRoute._addFileChildren(
 )
 
 interface AppRouteChildren {
+  AppOrgRoute: typeof AppOrgRouteWithChildren
   AppAdminRoute: typeof AppAdminRouteWithChildren
   AppHomeRoute: typeof AppHomeRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
+  AppOrgRoute: AppOrgRouteWithChildren,
   AppAdminRoute: AppAdminRouteWithChildren,
   AppHomeRoute: AppHomeRoute,
 }

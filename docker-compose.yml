@@ -1,4 +1,5 @@
-# Local Postgres + Redis for development. Start with: docker compose up -d
+# Local Postgres, Redis and an S3-compatible store (stands in for Cloudflare R2).
+# Start with: docker compose up -d   then: npm run storage:setup
 services:
   postgres:
     image: postgres:17-alpine
@@ -29,6 +30,17 @@ services:
       timeout: 3s
       retries: 10
 
+  # SeaweedFS speaks the S3 API, so the app talks to it exactly as it talks to R2.
+  # (MinIO no longer publishes images on Docker Hub.) Accepts any credentials locally.
+  s3:
+    image: chrislusf/seaweedfs:latest
+    command: ['server', '-s3', '-dir=/data', '-master.volumeSizeLimitMB=1024']
+    ports:
+      - '127.0.0.1:8333:8333'
+    volumes:
+      - s3data:/data
+
 volumes:
   pgdata:
   redisdata:
+  s3data:

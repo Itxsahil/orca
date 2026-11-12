@@ -41,6 +41,29 @@ const EnvSchema = z.object({
   /** Express "trust proxy" setting, e.g. 1 behind one reverse proxy, so rate limits see real IPs. */
   TRUST_PROXY: z.string().optional(),
 
+  /** Public URL of this API: Stream-compatible upload URLs and tus Locations point here. */
+  API_PUBLIC_URL: z
+    .url()
+    .default('http://localhost:3000')
+    .transform((v) => v.replace(/\/+$/, '')),
+
+  /* ---- Video storage: Cloudflare R2 (any S3-compatible store works for local dev) ---- */
+  /** e.g. https://<account id>.r2.cloudflarestorage.com, or http://localhost:8333 for local dev */
+  R2_ENDPOINT: z.url(),
+  R2_ACCESS_KEY_ID: z.string().min(1, 'R2_ACCESS_KEY_ID is required'),
+  R2_SECRET_ACCESS_KEY: z.string().min(1, 'R2_SECRET_ACCESS_KEY is required'),
+  R2_REGION: z.string().default('auto'),
+  /** Private bucket for original uploads. */
+  R2_SOURCE_BUCKET: z.string().default('videos-source'),
+  /** Private bucket for encoded output (HLS, thumbnails). Nothing is public: playback is presigned. */
+  R2_DELIVERY_BUCKET: z.string().default('videos-delivery'),
+  /** Largest accepted upload. Cloudflare Stream accepts files under 30 GB. */
+  MAX_UPLOAD_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(30 * 1024 ** 3),
+
   /** Resend API key. When unset, no emails are sent (invite links can still be copied). */
   RESEND_API_KEY: z
     .string()

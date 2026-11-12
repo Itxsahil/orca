@@ -78,6 +78,42 @@ export const CreatedInviteSchema = z.object({
   emailError: z.string().nullable(),
 });
 
+export const VideoStateSchema = z.enum([
+  'pendingupload',
+  'downloading',
+  'queued',
+  'inprogress',
+  'ready',
+  'error',
+]);
+
+/** A video as the dashboard lists it. The Stream-compatible API returns the full Stream object. */
+export const VideoSummarySchema = z.object({
+  uid: z.string(),
+  name: z.string().nullable(),
+  state: VideoStateSchema,
+  pctComplete: z.number().nullable(),
+  errorReasonText: z.string().nullable(),
+  size: z.number().nullable(),
+  uploadOffset: z.number(),
+  duration: z.number().nullable(),
+  created: z.date(),
+  uploaded: z.date().nullable(),
+});
+export type VideoSummary = z.infer<typeof VideoSummarySchema>;
+
+export const ApiTokenSchema = z.object({
+  id: z.uuid(),
+  name: z.string(),
+  prefix: z.string(),
+  createdAt: z.date(),
+  lastUsedAt: z.date().nullable(),
+});
+export type ApiTokenSummary = z.infer<typeof ApiTokenSchema>;
+
+const OrgInput = z.object({ orgId: z.uuid() });
+const VideoUid = z.string().regex(/^[0-9a-f]{32}$/);
+
 export const contract = {
   health: oc.output(
     z.object({ ok: z.literal(true), db: z.boolean(), redis: z.boolean(), time: z.date() }),
@@ -105,6 +141,39 @@ export const contract = {
     accept: oc
       .input(z.object({ token: z.string().min(1).max(200), name: Name, password: Password }))
       .output(MeSchema),
+  },
+
+  /** Organization owners. Every procedure checks that the user owns `orgId`. */
+  videos: {
+    list: oc.input(OrgInput).output(z.array(VideoSummarySchema)),
+    /** Creates a video and returns its tus upload URL (the same uploads the API uses). */
+    createUpload: oc
+      .input(
+        OrgInput.extend({
+          name: z.string().trim().min(1).max(255),
+          size: z.number().int().positive(),
+        }),
+      )
+      .output(z.object({ uid: z.string(), uploadUrl: z.string() })),
+    delete: oc.input(OrgInput.extend({ uid: VideoUid })).output(Ok),
+  },
+
+  apiTokens: {
+    /** The organization's tokens, plus what a Cloudflare Stream client needs to switch over. */
+    list: oc.input(OrgInput).output(
+      z.object({
+        /** Replaces https://api.cloudflare.com/client/v4 */
+        apiBase: z.string(),
+        /** Replaces the Cloudflare account id. */
+        accountId: z.uuid(),
+        tokens: z.array(ApiTokenSchema),
+      }),
+    ),
+    /** The token is returned once; only its hash is stored. */
+    create: oc
+      .input(OrgInput.extend({ name: Name }))
+      .output(ApiTokenSchema.extend({ token: z.string() })),
+    revoke: oc.input(OrgInput.extend({ id: z.uuid() })).output(Ok),
   },
 
   admin: {

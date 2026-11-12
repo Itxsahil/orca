@@ -10,7 +10,9 @@ import {
   memberships,
   organizations,
   sql,
+  apiTokens,
   users,
+  videos,
   type Db,
   type Invitation,
   type User,
@@ -29,6 +31,8 @@ import {
 import { hashToken, newToken } from './auth/tokens';
 import { renderInviteEmail } from './email/invite-email';
 import { sendEmail } from './email/send';
+import { createPendingVideo, deleteVideo, UploadError } from './video/upload-core';
+import { tusUploadUrl } from './video/upload-router';
 
 const os = implement(contract).$context<Context>();
 
@@ -54,6 +58,29 @@ const platformAdmin = os.middleware(async ({ context, next }) => {
   if (!user.isPlatformAdmin) throw new ORPCError('FORBIDDEN', { message: 'Platform admins only.' });
   return next({ context: { user } });
 });
+
+/** Requires the user to own `orgId` (and the organization not to be suspended). */
+async function assertOwner(db: Db, user: User, orgId: string) {
+  const [row] = await db
+    .select({ role: memberships.role, bannedAt: organizations.bannedAt })
+    .from(memberships)
+    .innerJoin(organizations, eq(organizations.id, memberships.orgId))
+    .where(and(eq(memberships.userId, user.id), eq(memberships.orgId, orgId)))
+    .limit(1);
+  if (!row || row.role !== 'owner') {
+    throw new ORPCError('FORBIDDEN', { message: 'You are not an owner of this organization.' });
+  }
+  if (row.bannedAt) throw new ORPCError('FORBIDDEN', { message: ORG_SUSPENDED });
+}
+
+function toOrpcError(err: unknown): never {
+  if (err instanceof UploadError) {
+    throw new ORPCError(err.status === 413 ? 'PAYLOAD_TOO_LARGE' : 'BAD_REQUEST', {
+      message: err.message,
+    });
+  }
+  throw err;
+}
 
 /* ─── Helpers ────────────────────────────────────────────────── */
 
@@ -315,6 +342,111 @@ export const router = os.router({
     }),
   },
 
+  videos: {
+    list: os.videos.list.use(authed).handler(async ({ input, context }) => {
+      await assertOwner(context.db, context.user, input.orgId);
+      const rows = await context.db
+        .select()
+        .from(videos)
+        .where(eq(videos.orgId, input.orgId))
+        .orderBy(desc(videos.created))
+        .limit(500);
+      return rows.map((v) => ({
+        uid: v.uid,
+        name: typeof v.meta.name === 'string' ? v.meta.name : null,
+        state: v.state,
+        pctComplete: v.pctComplete,
+        errorReasonText: v.errorReasonText,
+        size: v.size,
+        uploadOffset: v.uploadOffset,
+        duration: v.duration,
+        created: v.created,
+        uploaded: v.uploaded,
+      }));
+    }),
+
+    createUpload: os.videos.createUpload.use(authed).handler(async ({ input, context }) => {
+      await assertOwner(context.db, context.user, input.orgId);
+      await rateLimit(context.redis, `create-upload:${context.user.id}`, 120, MINUTE);
+      const video = await createPendingVideo(context.db, {
+        orgId: input.orgId,
+        createdBy: context.user.id,
+        size: input.size,
+        meta: { name: input.name },
+      }).catch(toOrpcError);
+      return { uid: video.uid, uploadUrl: tusUploadUrl(video.uid) };
+    }),
+
+    delete: os.videos.delete.use(authed).handler(async ({ input, context }) => {
+      await assertOwner(context.db, context.user, input.orgId);
+      const [video] = await context.db
+        .select()
+        .from(videos)
+        .where(and(eq(videos.uid, input.uid), eq(videos.orgId, input.orgId)))
+        .limit(1);
+      if (!video) throw new ORPCError('NOT_FOUND', { message: 'Video not found.' });
+      await deleteVideo(context.db, video);
+      return { ok: true as const };
+    }),
+  },
+
+  apiTokens: {
+    list: os.apiTokens.list.use(authed).handler(async ({ input, context }) => {
+      await assertOwner(context.db, context.user, input.orgId);
+      const tokens = await context.db
+        .select({
+          id: apiTokens.id,
+          name: apiTokens.name,
+          prefix: apiTokens.prefix,
+          createdAt: apiTokens.createdAt,
+          lastUsedAt: apiTokens.lastUsedAt,
+        })
+        .from(apiTokens)
+        .where(and(eq(apiTokens.orgId, input.orgId), isNull(apiTokens.revokedAt)))
+        .orderBy(desc(apiTokens.createdAt));
+      return { apiBase: `${env.API_PUBLIC_URL}/client/v4`, accountId: input.orgId, tokens };
+    }),
+
+    create: os.apiTokens.create.use(authed).handler(async ({ input, context }) => {
+      await assertOwner(context.db, context.user, input.orgId);
+      await rateLimit(context.redis, `create-token:${context.user.id}`, 20, MINUTE);
+      const token = `vp_${newToken()}`;
+      const [row] = await context.db
+        .insert(apiTokens)
+        .values({
+          orgId: input.orgId,
+          name: input.name,
+          tokenHash: hashToken(token),
+          prefix: token.slice(0, 10),
+          createdBy: context.user.id,
+        })
+        .returning();
+      return {
+        id: row!.id,
+        name: row!.name,
+        prefix: row!.prefix,
+        createdAt: row!.createdAt,
+        lastUsedAt: row!.lastUsedAt,
+        token,
+      };
+    }),
+
+    revoke: os.apiTokens.revoke.use(authed).handler(async ({ input, context }) => {
+      await assertOwner(context.db, context.user, input.orgId);
+      await context.db
+        .update(apiTokens)
+        .set({ revokedAt: new Date() })
+        .where(
+          and(
+            eq(apiTokens.id, input.id),
+            eq(apiTokens.orgId, input.orgId),
+            isNull(apiTokens.revokedAt),
+          ),
+        );
+      return { ok: true as const };
+    }),
+  },
+
   admin: {
     orgs: {
       list: os.admin.orgs.list.use(platformAdmin).handler(async ({ context }) => {
@@ -518,6 +650,4 @@ export const router = os.router({
   },
 });
 
-/** For organization-scoped procedures (coming with org features). */
-export { authed };
 export type Router = typeof router;

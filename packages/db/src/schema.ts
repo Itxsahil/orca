@@ -1,7 +1,11 @@
 import { sql } from 'drizzle-orm';
 import {
+  bigint,
   boolean,
   index,
+  integer,
+  jsonb,
+  real,
   pgEnum,
   pgTable,
   primaryKey,
@@ -92,8 +96,103 @@ export const invitations = pgTable(
   (t) => [index().on(t.orgId)],
 );
 
+/* ─── Videos (shaped like Cloudflare Stream's video object) ───── */
+
+/** Cloudflare Stream's states, so Stream clients see the same lifecycle. */
+export const videoState = pgEnum('video_state', [
+  'pendingupload',
+  'downloading',
+  'queued',
+  'inprogress',
+  'ready',
+  'error',
+]);
+
+export interface UploadedPart {
+  PartNumber: number;
+  ETag: string;
+}
+
+export const videos = pgTable(
+  'videos',
+  {
+    /** 32 hex characters, like a Stream uid. */
+    uid: text().primaryKey(),
+    orgId: uuid()
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    state: videoState().notNull().default('pendingupload'),
+    pctComplete: real(),
+    errorReasonCode: text(),
+    errorReasonText: text(),
+    meta: jsonb().$type<Record<string, unknown>>().notNull().default({}),
+    creator: text(),
+    /** Stream calls this requireSignedURLs. */
+    requireSignedUrls: boolean().notNull().default(false),
+    allowedOrigins: jsonb().$type<string[]>().notNull().default([]),
+    thumbnailTimestampPct: real().notNull().default(0),
+    scheduledDeletion: timestamp({ withTimezone: true }),
+    /** Limits set when a one-time upload URL is created (direct creator uploads). */
+    maxDurationSeconds: integer(),
+    maxSizeBytes: bigint({ mode: 'number' }),
+    /** A one-time upload URL stops working after this. */
+    uploadExpiry: timestamp({ withTimezone: true }),
+
+    /* Upload bookkeeping (not part of the Stream object). */
+    /** Total size announced by the client (tus Upload-Length), then the stored size. */
+    size: bigint({ mode: 'number' }),
+    /** Bytes received so far (tus Upload-Offset). */
+    uploadOffset: bigint({ mode: 'number' }).notNull().default(0),
+    /** R2 multipart upload id while uploading. */
+    uploadId: text(),
+    /** Every chunk except the last must be this size (R2 multipart + Stream's tus rules). */
+    partSize: integer(),
+    parts: jsonb().$type<UploadedPart[]>().notNull().default([]),
+    sourceKey: text(),
+    uploaded: timestamp({ withTimezone: true }),
+
+    /* Filled by the encoder (phase 2). */
+    duration: real(),
+    width: integer(),
+    height: integer(),
+    readyToStreamAt: timestamp({ withTimezone: true }),
+
+    createdBy: uuid().references(() => users.id, { onDelete: 'set null' }),
+    created: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    modified: timestamp({ withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (t) => [index().on(t.orgId, t.created)],
+);
+
+/** Org API tokens for the Stream-compatible API (Authorization: Bearer <token>). */
+export const apiTokens = pgTable(
+  'api_tokens',
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    orgId: uuid()
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    name: text().notNull(),
+    /** SHA-256 of the token. The token is shown once and never stored. */
+    tokenHash: text().notNull().unique(),
+    /** First characters, to recognise a token in lists. */
+    prefix: text().notNull(),
+    createdBy: uuid().references(() => users.id, { onDelete: 'set null' }),
+    lastUsedAt: timestamp({ withTimezone: true }),
+    revokedAt: timestamp({ withTimezone: true }),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index().on(t.orgId)],
+);
+
 export type User = typeof users.$inferSelect;
 export type Organization = typeof organizations.$inferSelect;
 export type Membership = typeof memberships.$inferSelect;
 export type Invitation = typeof invitations.$inferSelect;
 export type OrgRole = (typeof orgRole.enumValues)[number];
+export type Video = typeof videos.$inferSelect;
+export type VideoState = (typeof videoState.enumValues)[number];
+export type ApiToken = typeof apiTokens.$inferSelect;

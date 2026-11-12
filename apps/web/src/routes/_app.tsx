@@ -1,11 +1,9 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { createFileRoute, Outlet, redirect, useNavigate } from '@tanstack/react-router';
+import { createFileRoute, Outlet, redirect } from '@tanstack/react-router';
 import { Button } from '@/components/ui/button';
 import { ModeToggle } from '@/components/mode-toggle';
 import { AdminSidebar } from '@/components/admin-sidebar';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
-import { getAuth } from '@/lib/auth';
-import { orpc } from '@/orpc';
+import { getAuth, useLogout } from '@/lib/auth';
 
 /** Layout + guard for every logged-in page. Child routes get `context.me`. */
 export const Route = createFileRoute('/_app')({
@@ -20,16 +18,7 @@ export const Route = createFileRoute('/_app')({
 
 function AppLayout() {
   const { me } = Route.useRouteContext();
-  const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const logout = useMutation(
-    orpc.auth.logout.mutationOptions({
-      onSuccess: () => {
-        queryClient.clear();
-        void navigate({ to: '/login', replace: true });
-      },
-    }),
-  );
+  const logout = useLogout();
 
   // The platform admin gets the sidebar layout; organization owners keep the top bar.
   if (me.isPlatformAdmin) {
@@ -46,6 +35,9 @@ function AppLayout() {
       </SidebarProvider>
     );
   }
+
+  // Organization owners: the /_app/_org layout draws the sidebar.
+  if (me.orgs.length > 0) return <Outlet />;
 
   return (
     <>
